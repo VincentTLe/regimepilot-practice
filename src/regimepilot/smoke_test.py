@@ -11,6 +11,7 @@ import json
 import sys
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
@@ -25,6 +26,14 @@ UNDERLYING = "SPY"
 BAR_LOOKBACK_DAYS = 10
 MIN_DAYS_TO_EXPIRATION = 3
 MAX_DAYS_TO_EXPIRATION = 14
+
+# Option expirations are US market calendar dates, so days-to-expiration has to
+# be counted from the market's date rather than from UTC's. Between 00:00 UTC
+# and New York midnight the two disagree: UTC is already on the next day while
+# the options market is still on the previous one. Spelled out here rather than
+# imported, because this module is the one the observer imports from, not the
+# other way round.
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
 
 # One page is enough to prove connectivity. The counts reported below are
 # therefore "contracts returned", not "contracts that exist".
@@ -100,8 +109,19 @@ def _fetch_spy_bars(data_client: Any, now: datetime) -> list[Any]:
     return list(getattr(barset, "data", {}).get(UNDERLYING) or [])
 
 
+def _market_date(now: datetime) -> date:
+    """The New York calendar date of ``now``. A naive value is taken as UTC.
+
+    Converted through a real timezone, never a fixed offset, so the answer stays
+    right on both sides of a daylight saving change.
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now.astimezone(MARKET_TIMEZONE).date()
+
+
 def _fetch_spy_option_contracts(trading_client: Any, now: datetime) -> list[Any]:
-    today = now.date()
+    today = _market_date(now)
     request = GetOptionContractsRequest(
         underlying_symbols=[UNDERLYING],
         status=AssetStatus.ACTIVE,

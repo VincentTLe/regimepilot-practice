@@ -4,6 +4,8 @@ call is ever made."""
 import json
 from datetime import date, datetime, timezone
 
+import pytest
+
 from regimepilot.smoke_test import (
     CHECKS,
     STATUS_EMPTY,
@@ -152,6 +154,60 @@ def test_option_request_uses_the_three_to_fourteen_day_window():
     assert list(request.underlying_symbols) == ["SPY"]
     assert request.expiration_date_gte == date(2026, 8, 28)
     assert request.expiration_date_lte == date(2026, 9, 8)
+
+
+@pytest.mark.parametrize(
+    "now, earliest, latest",
+    [
+        # 10:30 New York on Tuesday 2026-08-25. The UTC date and the New York
+        # date agree, which is the ordinary daytime case.
+        (
+            datetime(2026, 8, 25, 14, 30, tzinfo=timezone.utc),
+            date(2026, 8, 28),
+            date(2026, 9, 8),
+        ),
+        # 20:30 New York on the *same* Tuesday. UTC has already rolled over to
+        # Wednesday; the US options calendar has not, so the window must be
+        # identical to the one above.
+        (
+            datetime(2026, 8, 26, 0, 30, tzinfo=timezone.utc),
+            date(2026, 8, 28),
+            date(2026, 9, 8),
+        ),
+        # 23:30 New York on Tuesday 2026-01-13, in EST. Only a real timezone
+        # conversion lands on the 13th here: a hardcoded -4 would read this
+        # instant as the 14th and shift both bounds by a day.
+        (
+            datetime(2026, 1, 14, 4, 30, tzinfo=timezone.utc),
+            date(2026, 1, 16),
+            date(2026, 1, 27),
+        ),
+        # 00:30 New York on Wednesday 2026-08-26, in EDT. New York really has
+        # crossed midnight here, so the window really does move -- and a
+        # hardcoded -5 would be an hour short of noticing. Paired with the case
+        # above, this pins the conversion to the offset actually in force on
+        # the day rather than to either constant.
+        (
+            datetime(2026, 8, 26, 4, 30, tzinfo=timezone.utc),
+            date(2026, 8, 29),
+            date(2026, 9, 9),
+        ),
+    ],
+    ids=[
+        "midsession-edt",
+        "before-ny-midnight-edt",
+        "before-ny-midnight-est",
+        "after-ny-midnight-edt",
+    ],
+)
+def test_option_request_window_uses_the_new_york_calendar_date(now, earliest, latest):
+    """DTE is counted from the market's date, not from whatever date UTC is on."""
+    trading = FakeTradingClient()
+    run_smoke_test(trading, FakeDataClient(), now=now)
+
+    request = trading.option_requests[0]
+    assert request.expiration_date_gte == earliest
+    assert request.expiration_date_lte == latest
 
 
 def test_failed_check_is_isolated_and_does_not_echo_the_exception_message(capsys):
