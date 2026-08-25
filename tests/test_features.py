@@ -798,3 +798,74 @@ def test_an_unusable_close_time_falls_back_to_the_regular_close():
 
     assert build(session_close_at=tomorrow).return_15m == pytest.approx(0.10)
     assert build(session_close_at=None).return_15m == pytest.approx(0.10)
+
+
+# --------------------------------------------------------------------------
+# an unusable newest close nulls its dependants, it does not move the anchor
+# --------------------------------------------------------------------------
+
+# The newest completed bar of ``main_bars()`` is 10:35, closing at 110.0. Every
+# case below replaces that close with an unusable one while leaving 09:30..10:34
+# untouched, so the only thing an implementation could do wrong is quietly
+# promote 10:34 to "latest" and report a fifteen-minute-old observation as
+# current.
+UNUSABLE_CLOSES = [
+    pytest.param(0.0, id="zero"),
+    pytest.param(-5.0, id="negative"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="positive-infinity"),
+    pytest.param(float("-inf"), id="negative-infinity"),
+    pytest.param(None, id="missing"),
+]
+
+
+def bars_with_unusable_latest_close(bad):
+    bars = main_bars()
+    bars[-1] = bar(10, 35, bad)
+    return bars
+
+
+@pytest.mark.parametrize("bad", UNUSABLE_CLOSES)
+def test_an_unusable_latest_close_nulls_every_feature_measured_from_it(bad):
+    packet = build(minute_bars=bars_with_unusable_latest_close(bad))
+
+    assert packet.return_15m is None
+    assert packet.return_60m is None
+    assert packet.return_since_open is None
+    assert packet.realized_vol_30m is None
+
+
+@pytest.mark.parametrize("bad", UNUSABLE_CLOSES)
+def test_an_unusable_latest_close_leaves_the_features_that_ignore_it_intact(bad):
+    """The gap and the spread never touch the newest close, so they survive."""
+    packet = build(minute_bars=bars_with_unusable_latest_close(bad))
+
+    # 09:30 opens at 200.0; the previous regular session closed at 250.0.
+    assert packet.overnight_gap_pct == pytest.approx(200.0 / 250.0 - 1)
+    # bid 99.90 / ask 100.10 -> a 0.20 spread on a 100.00 mid.
+    assert packet.spread_bps == pytest.approx(20.0)
+    assert packet.minutes_since_open == pytest.approx(66 + 5 / 60)
+
+
+@pytest.mark.parametrize("bad", UNUSABLE_CLOSES)
+def test_bar_age_still_describes_the_real_newest_completed_bar(bad):
+    """10:35 exists; only its close is unusable. Its age is still the truth."""
+    packet = build(minute_bars=bars_with_unusable_latest_close(bad))
+
+    # 10:35:00 -> 10:36:05.
+    assert packet.bar_age_seconds == pytest.approx(65.0)
+
+
+def test_the_bar_before_an_unusable_latest_close_is_not_promoted():
+    """A control: 10:34 on its own is a perfectly usable observation.
+
+    Observed one minute earlier, the same fixture reports the 10:34 anchor and
+    real returns. That is what makes the assertions above meaningful -- the
+    nulls come from refusing to shift the anchor, not from a broken fixture.
+    """
+    packet = build(minute_bars=main_bars()[:-1], observed_at=et(10, 35, 5))
+
+    assert packet.bar_age_seconds == pytest.approx(65.0)
+    assert packet.return_15m == pytest.approx(100.0 / 100.0 - 1)
+    assert packet.return_since_open == pytest.approx(100.0 / 200.0 - 1)
+    assert packet.realized_vol_30m == pytest.approx(0.0)

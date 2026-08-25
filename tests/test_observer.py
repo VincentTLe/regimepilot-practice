@@ -15,6 +15,7 @@ from regimepilot.models import (
     OptionContractSummary,
 )
 from regimepilot.observer import (
+    MAX_OPTION_CONTRACT_PAGES,
     ObserverError,
     format_summary,
     normalize_contract,
@@ -337,7 +338,7 @@ def test_empty_option_contract_list_is_a_valid_universe():
     assert packet.option_universe.contract_count == 0
     assert packet.option_universe.earliest_expiration is None
     assert packet.option_universe.latest_expiration is None
-    assert packet.option_universe.contracts == []
+    assert packet.option_universe.contracts == ()
     # An empty universe is not an error.
     assert isinstance(packet, ObservationPacket)
 
@@ -509,3 +510,169 @@ def test_observer_exposes_no_order_or_position_mutation():
     forbidden = ("submit", "cancel", "replace", "close_position", "close_all", "exercise")
     offenders = [name for name in dir(module) if any(word in name.lower() for word in forbidden)]
     assert offenders == []
+
+
+# --------------------------------------------------------------------------
+# 11. the option window is a New York calendar date, not a UTC one
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "now, earliest, latest",
+    [
+        # 10:30 New York on Tuesday 2026-08-25. The UTC date and the New York
+        # date agree, which is the ordinary daytime case.
+        (
+            datetime(2026, 8, 25, 14, 30, tzinfo=timezone.utc),
+            date(2026, 8, 28),
+            date(2026, 9, 8),
+        ),
+        # 20:30 New York on the *same* Tuesday. UTC has already rolled over to
+        # Wednesday; the US options calendar has not, so the window must be
+        # identical to the one above.
+        (
+            datetime(2026, 8, 26, 0, 30, tzinfo=timezone.utc),
+            date(2026, 8, 28),
+            date(2026, 9, 8),
+        ),
+        # 23:30 New York on Tuesday 2026-01-13, in EST. Only a real timezone
+        # conversion lands on the 13th here: a hardcoded -4 would read this
+        # instant as the 14th and shift both bounds by a day.
+        (
+            datetime(2026, 1, 14, 4, 30, tzinfo=timezone.utc),
+            date(2026, 1, 16),
+            date(2026, 1, 27),
+        ),
+    ],
+    ids=["midsession-edt", "after-utc-midnight-edt", "after-utc-midnight-est"],
+)
+def test_option_expiration_window_uses_the_new_york_calendar_date(now, earliest, latest):
+    """DTE is counted from the market's date, not from whatever date UTC is on."""
+    trading = FakeTradingClient()
+    observe(trading, FakeDataClient(), now=now)
+
+    request = trading.option_requests[0]
+    assert request.expiration_date_gte == earliest
+    assert request.expiration_date_lte == latest
+
+
+# --------------------------------------------------------------------------
+# 12. the observed universe cannot be mutated after the fact
+# --------------------------------------------------------------------------
+
+
+def test_observed_contracts_cannot_be_appended_to_or_removed_from():
+    """An observation is a record. Nothing may add a contract to it later."""
+    packet = observe_with(FakeTradingClient(contracts=[FakeContract()]))
+    contracts = packet.option_universe.contracts
+
+    assert not hasattr(contracts, "append")
+    assert not hasattr(contracts, "remove")
+    with pytest.raises(TypeError):
+        contracts[0] = FakeContract()
+    with pytest.raises(TypeError):
+        del contracts[0]
+
+
+def test_the_option_universe_is_frozen_and_closed_to_stray_fields():
+    packet = observe_with(FakeTradingClient(contracts=[FakeContract()]))
+    universe = packet.option_universe
+
+    with pytest.raises(Exception):
+        universe.contracts = ()
+    with pytest.raises(Exception):
+        universe.contract_count = 99
+    with pytest.raises(Exception):
+        packet.option_universe = universe
+
+
+def test_the_universe_serializes_and_round_trips_with_its_contracts_intact():
+    trading = FakeTradingClient(
+        contracts=[
+            FakeContract(symbol="SPY260828C00640000", expiration=date(2026, 8, 28)),
+            FakeContract(symbol="SPY260904P00635000", expiration=date(2026, 9, 4)),
+        ]
+    )
+    packet = observe_with(trading)
+
+    payload = json.loads(packet.model_dump_json())
+    serialized = payload["option_universe"]["contracts"]
+
+    assert [contract["symbol"] for contract in serialized] == [
+        "SPY260828C00640000",
+        "SPY260904P00635000",
+    ]
+
+    restored = ObservationPacket.model_validate(payload)
+    assert restored.option_universe == packet.option_universe
+    assert not hasattr(restored.option_universe.contracts, "append")
+
+
+def test_the_universe_count_and_bounds_agree_with_the_contracts_it_holds():
+    trading = FakeTradingClient(
+        contracts=[
+            FakeContract(symbol="a", expiration=date(2026, 9, 4)),
+            FakeContract(symbol="b", expiration=date(2026, 8, 28)),
+            FakeContract(symbol="c", expiration=date(2026, 9, 1)),
+        ]
+    )
+    universe = observe_with(trading).option_universe
+
+    assert universe.contract_count == 3
+    assert len(universe.contracts) == 3
+    assert universe.earliest_expiration == date(2026, 8, 28)
+    assert universe.latest_expiration == date(2026, 9, 4)
+
+
+# --------------------------------------------------------------------------
+# 13. a universe too large to page is an error, never a partial packet
+# --------------------------------------------------------------------------
+
+
+def _endless_pages(count):
+    """``count`` pages, every one of which promises another after it."""
+    return [([FakeContract(symbol=f"SPY-{index}")], f"token-{index + 2}") for index in range(count)]
+
+
+def test_a_universe_larger_than_the_page_cap_raises_instead_of_truncating():
+    trading = FakeTradingClient(pages=_endless_pages(MAX_OPTION_CONTRACT_PAGES))
+
+    with pytest.raises(ObserverError) as caught:
+        observe(trading, FakeDataClient(), now=NOW)
+
+    # Every allowed page was read before giving up, and no packet came back.
+    assert len(trading.option_requests) == MAX_OPTION_CONTRACT_PAGES
+
+    message = str(caught.value)
+    assert "option contracts" in message
+    # The message must say *why* it stopped, not merely that something failed.
+    assert "page" in message.lower()
+
+
+def test_the_page_cap_error_leaks_no_credential_or_upstream_text():
+    trading = FakeTradingClient(pages=_endless_pages(MAX_OPTION_CONTRACT_PAGES))
+
+    with pytest.raises(ObserverError) as caught:
+        observe(trading, FakeDataClient(), now=NOW)
+
+    rendered = "".join(
+        traceback.format_exception(type(caught.value), caught.value, caught.value.__traceback__)
+    )
+    for blob in (str(caught.value), rendered):
+        assert API_KEY not in blob
+        assert SECRET_KEY not in blob
+        assert ACCOUNT_ID not in blob
+        assert "token-" not in blob
+
+
+def test_a_universe_ending_on_the_final_allowed_page_is_a_complete_observation():
+    """The cap is a limit on pages read, not a limit one short of it."""
+    pages = _endless_pages(MAX_OPTION_CONTRACT_PAGES - 1)
+    pages.append(([FakeContract(symbol="last", expiration=date(2026, 9, 4))], None))
+    trading = FakeTradingClient(pages=pages)
+
+    packet = observe(trading, FakeDataClient(), now=NOW)
+
+    assert len(trading.option_requests) == MAX_OPTION_CONTRACT_PAGES
+    assert packet.option_universe.contract_count == MAX_OPTION_CONTRACT_PAGES
+    assert packet.option_universe.contracts[-1].symbol == "last"

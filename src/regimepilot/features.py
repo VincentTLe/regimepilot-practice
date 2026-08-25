@@ -9,7 +9,7 @@ Two rules shape every calculation here:
 * The feature layer never fabricates market information. A missing, stale or
   invalid input makes the feature that depends on it ``None`` -- never a
   substitute value, never a shorter horizon quietly standing in for a longer
-  one.
+  one, and never an older bar standing in for the newest one.
 * One regular session only. A bar belongs to this observation if it falls
   between 09:30 New York and the session's actual close on the session that
   contains ``observed_at`` -- 16:00 normally, 13:00 on a half day. Pre-market,
@@ -304,8 +304,15 @@ def build_feature_packet(
     # Only bars carrying a real price take part in the return calculations.
     priced = [bar for bar in bars if _is_price(bar.close)]
     close_at_stamp = {bar.timestamp: bar.close for bar in priced}
-    latest_close = priced[-1].close if priced else None
-    latest_stamp = priced[-1].timestamp if priced else None
+
+    # Every intraday feature is measured from the newest completed bar or from
+    # nothing at all. If that bar arrived with an unusable close, an older bar
+    # must not take its place: the arithmetic would still succeed and would
+    # report a move that ended minutes ago as the current one, with no field
+    # anywhere in the packet showing that the observation had slipped backwards.
+    anchor = latest_bar if latest_bar is not None and _is_price(latest_bar.close) else None
+    latest_close = anchor.close if anchor is not None else None
+    latest_stamp = anchor.timestamp if anchor is not None else None
 
     def close_minutes_before(minutes: int) -> float | None:
         """The close of the bar exactly ``minutes`` before the latest one.
@@ -324,6 +331,10 @@ def build_feature_packet(
     session_open = opening_bar.open if opening_bar is not None else None
     if not _is_price(session_open):
         session_open = None
+
+    # The volatility window has to end on the anchor for the same reason, so a
+    # missing anchor makes it null rather than a measurement of an older window.
+    realized_vol_30m = realized_volatility(priced) if anchor is not None else None
 
     bar_age_seconds = (
         None
@@ -354,7 +365,7 @@ def build_feature_packet(
         overnight_gap_pct=_ratio_change(
             session_open, previous_session_close(daily_bars, session_day)
         ),
-        realized_vol_30m=realized_volatility(priced),
+        realized_vol_30m=realized_vol_30m,
     )
 
 

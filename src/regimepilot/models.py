@@ -107,12 +107,17 @@ class OptionUniverse(Observation):
     ``contract_count`` counts ``contracts``; the observer pages the endpoint to
     exhaustion so the count and the expiration bounds describe the whole
     requested window rather than one page of it.
+
+    ``contracts`` is a tuple, not a list. Freezing the model alone would still
+    have left the collection open: a holder could append a contract that was
+    never observed, or drop one that was, while ``contract_count`` and the
+    expiration bounds went on describing the original observation.
     """
 
     contract_count: int = 0
     earliest_expiration: date | None = None
     latest_expiration: date | None = None
-    contracts: list[OptionContractSummary] = []
+    contracts: tuple[OptionContractSummary, ...] = ()
 
 
 class ObservationPacket(Observation):

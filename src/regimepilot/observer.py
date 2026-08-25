@@ -18,8 +18,9 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable, Iterable, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from alpaca.data.requests import (
     StockBarsRequest,
@@ -49,6 +50,13 @@ from regimepilot.smoke_test import build_clients, mask_account_id
 
 UNDERLYING = UNDERLYING_SYMBOL
 
+# Option expirations are US market calendar dates, so days-to-expiration has to
+# be counted from the market's date rather than from UTC's. Between 00:00 UTC
+# and New York midnight the two disagree: UTC is already on the next day while
+# the options market is still on the previous one. Declared here rather than
+# imported from a later phase, so this module stays free-standing.
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
+
 # Calendar days of daily bars to request. Only the last two are kept; the span
 # is wide enough that a weekend plus a holiday still leaves two sessions.
 DAILY_BAR_LOOKBACK_DAYS = 10
@@ -60,6 +68,7 @@ MAX_DAYS_TO_EXPIRATION = 14
 # SPY expires daily, so one window holds thousands of contracts. Page to
 # exhaustion, because a truncated page would make contract_count and the
 # expiration bounds describe a slice while claiming to describe the window.
+# Running past the cap is therefore a failed observation, not a smaller one.
 OPTION_CONTRACT_PAGE_LIMIT = 10_000
 MAX_OPTION_CONTRACT_PAGES = 20
 
@@ -80,6 +89,10 @@ def _guarded(label: str, call: Callable[[], Any]) -> Any:
     """
     try:
         return call()
+    except ObserverError:
+        # Already ours, and already built without upstream text. Re-wrapping it
+        # would replace a specific, safe message with a vaguer one.
+        raise
     except Exception as error:  # noqa: BLE001 - deliberately uniform
         raise ObserverError(f"failed to observe {label}: {type(error).__name__}") from None
 
@@ -169,7 +182,7 @@ def normalize_option_universe(contracts: Iterable[Any]) -> OptionUniverse:
         contract_count=len(summaries),
         earliest_expiration=expirations[0] if expirations else None,
         latest_expiration=expirations[-1] if expirations else None,
-        contracts=summaries,
+        contracts=tuple(summaries),
     )
 
 
@@ -217,9 +230,24 @@ def _fetch_daily_bars(data_client: Any, now: datetime) -> list[Any]:
     return list(data.get(UNDERLYING) or [])
 
 
+def _market_date(now: datetime) -> date:
+    """The New York calendar date of ``now``. A naive value is taken as UTC.
+
+    Converted through a real timezone, never a fixed offset, so the answer stays
+    right on both sides of a daylight saving change.
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now.astimezone(MARKET_TIMEZONE).date()
+
+
 def _fetch_option_contracts(trading_client: Any, now: datetime) -> list[Any]:
-    """Page the option-contract endpoint to exhaustion."""
-    today = now.date()
+    """Page the option-contract endpoint to exhaustion.
+
+    Raises ``ObserverError`` if the window needs more pages than the cap allows,
+    because a complete universe is the only kind this observer reports.
+    """
+    today = _market_date(now)
     contracts: list[Any] = []
     page_token: str | None = None
 
@@ -238,13 +266,14 @@ def _fetch_option_contracts(trading_client: Any, now: datetime) -> list[Any]:
         if not page_token:
             return contracts
 
-    # Never truncate silently: say so, so the count is not read as complete.
-    print(
-        f"warning: stopped after {MAX_OPTION_CONTRACT_PAGES} option pages; "
-        "the contract list is truncated.",
-        file=sys.stderr,
+    # More pages remain than the cap allows. Returning what we have would hand
+    # back a slice of the window wearing the whole window's name, so the
+    # observation fails instead. The message names only our own cap: no page
+    # token, no request text, nothing that came from upstream.
+    raise ObserverError(
+        "failed to observe option contracts: more pages remain after the "
+        f"{MAX_OPTION_CONTRACT_PAGES}-page limit, so the universe is incomplete"
     )
-    return contracts
 
 
 def observe(
