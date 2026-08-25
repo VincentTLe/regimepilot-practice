@@ -719,3 +719,82 @@ def test_an_invalid_close_inside_the_window_leaves_a_gap_and_yields_null():
 def test_a_consecutive_window_is_still_measured_exactly():
     """The spacing check must not disturb the ordinary case."""
     assert build().realized_vol_30m == pytest.approx(math.log(1.1))
+
+
+# --------------------------------------------------------------------------
+# an early close really ends the session for every feature
+# --------------------------------------------------------------------------
+
+
+def half_day_bars():
+    """09:30..12:59 as a real half-day session, then post-close bars 13:00..13:30.
+
+    Closes are 100.0 except 09:30 opening at 200.0, 11:59 at 88.0 (sixty
+    minutes before the last in-session bar) and 12:59 at 110.0. Every bar from
+    13:00 onward is 999.0, so if any of them leaked into a feature the value
+    would be unmistakable.
+    """
+    bars = []
+    for stamp in session_minutes(end=(12, 59)):
+        hm = (stamp.hour, stamp.minute)
+        close = {(11, 59): 88.0, (12, 59): 110.0}.get(hm, 100.0)
+        open_ = 200.0 if hm == (9, 30) else close
+        bars.append(bar(stamp.hour, stamp.minute, close, open_=open_))
+
+    # Contiguous, so a broken filter would produce numbers rather than nulls.
+    bars += [bar(s.hour, s.minute, 999.0) for s in session_minutes(start=(13, 0), end=(13, 30))]
+    return bars
+
+
+def test_bars_at_or_after_an_early_close_never_enter_a_feature():
+    """Market open, this session closes 13:00, and the feed hands us 13:00-13:30."""
+    packet = build(
+        minute_bars=half_day_bars(),
+        observed_at=et(13, 31, 5),  # late enough that every 999.0 bar is complete
+        market_is_open=True,
+        session_close_at=et(13, 0),
+    )
+
+    # The last in-session bar is 12:59 at 110.0, not 13:30 at 999.0.
+    assert packet.return_15m == pytest.approx(110.0 / 100.0 - 1)  # 12:59 over 12:44
+    assert packet.return_60m == pytest.approx(110.0 / 88.0 - 1)  # 12:59 over 11:59
+    assert packet.return_since_open == pytest.approx(110.0 / 200.0 - 1)
+    # 12:29..12:58 at 100.0 then 12:59 at 110.0: the same closed form as always.
+    assert packet.realized_vol_30m == pytest.approx(math.log(1.1))
+    # Age is measured from 12:59:00, so 32 minutes and 5 seconds.
+    assert packet.bar_age_seconds == pytest.approx(32 * 60 + 5)
+
+
+def test_a_broken_early_close_filter_would_be_visible():
+    """The same bars with a 16:00 close: proof the fixture discriminates.
+
+    Every assertion above flips, so the test cannot be passing by accident.
+    """
+    leaked = build(
+        minute_bars=half_day_bars(),
+        observed_at=et(13, 31, 5),
+        market_is_open=True,
+        session_close_at=et(16, 0),
+    )
+
+    assert leaked.return_15m == pytest.approx(0.0)  # 999.0 over 999.0
+    assert leaked.return_since_open == pytest.approx(999.0 / 200.0 - 1)
+    assert leaked.realized_vol_30m == pytest.approx(0.0)
+    assert leaked.bar_age_seconds == pytest.approx(65.0)  # the 13:30 bar
+
+
+def test_a_normal_close_of_1600_changes_nothing():
+    """The clock says 16:00 on an ordinary day, which is what was assumed before."""
+    packet = build(session_close_at=et(16, 0))
+
+    assert packet.return_15m == pytest.approx(0.10)
+    assert packet.return_60m == pytest.approx(0.25)
+    assert packet.realized_vol_30m == pytest.approx(math.log(1.1))
+
+
+def test_an_unusable_close_time_falls_back_to_the_regular_close():
+    """A next-day close cannot bound today, so the 16:00 regular close stands in."""
+    tomorrow = et(16, 0, day=date(2026, 8, 25))
+
+    assert build(session_close_at=tomorrow).return_15m == pytest.approx(0.10)
+    assert build(session_close_at=None).return_15m == pytest.approx(0.10)

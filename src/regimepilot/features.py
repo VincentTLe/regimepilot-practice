@@ -11,9 +11,10 @@ Two rules shape every calculation here:
   substitute value, never a shorter horizon quietly standing in for a longer
   one.
 * One regular session only. A bar belongs to this observation if it falls
-  inside 09:30-16:00 New York on the session that contains ``observed_at``.
-  Pre-market, after-hours and previous-session bars are dropped before any
-  arithmetic, so yesterday can never pad today's history.
+  between 09:30 New York and the session's actual close on the session that
+  contains ``observed_at`` -- 16:00 normally, 13:00 on a half day. Pre-market,
+  post-close and previous-session bars are dropped before any arithmetic, so
+  yesterday can never pad today's history and an early close really ends it.
 
 A minute bar is stamped with the *left* edge of its interval: the bar labelled
 09:59 covers 09:59:00 (inclusive) to 10:00:00 (exclusive). It is therefore
@@ -136,21 +137,34 @@ def session_minute_bars(
     *,
     observed_at: datetime,
     session_day: date | None = None,
+    session_close_at: datetime | None = None,
 ) -> list[OhlcvBar]:
     """The completed regular-session bars of one session, sorted and de-duplicated.
+
+    The session runs from 09:30 New York to ``session_close_at``, which is when
+    this session actually closes according to the market clock. On a normal day
+    that is 16:00; on a half day it is 13:00, and a bar at or after 13:00 is
+    then outside the session and must not reach any feature. A missing or
+    out-of-session close time falls back to the 16:00 regular close, which is
+    the right default for a session the clock cannot currently describe.
+
+    Nothing assumes the feed declines to return post-close bars; they are
+    filtered here whether or not they arrive.
 
     Dropped here, and therefore invisible to every calculation below:
 
     * bars with no timestamp,
-    * bars outside 09:30-16:00 New York on this session -- which is one test
-      covering pre-market, after-hours, and any other trading day at once,
+    * bars outside the session window -- which is one test covering pre-market,
+      after-hours, post-early-close, and any other trading day at once,
     * the bar of the currently forming minute.
 
     Duplicate timestamps resolve deterministically to the **last** bar supplied
     for that timestamp, so a corrected bar supersedes the one it corrects.
     """
     observed_at = to_utc(observed_at)
-    opens, closes = session_bounds(session_day or session_date_of(observed_at))
+    session_day = session_day or session_date_of(observed_at)
+    opens, regular_close = session_bounds(session_day)
+    closes = _session_close(session_close_at, session_day) or regular_close
     complete_by = observed_at - timedelta(seconds=MINUTE_BAR_SECONDS)
 
     kept = [
@@ -265,15 +279,23 @@ def build_feature_packet(
 
     ``session_close_at`` is when this session actually closes, taken from the
     market clock rather than assumed. Half days close at 13:00 New York, so a
-    hardcoded 16:00 would over-report ``minutes_to_close`` by three hours.
-    Without it that field is ``None``: an unknown close time is not a 16:00 one.
+    hardcoded 16:00 would both over-report ``minutes_to_close`` by three hours
+    and let post-close bars into the returns. It bounds the session for every
+    feature. ``minutes_to_close`` and ``minutes_since_open`` are ``None``
+    without it -- an unknown close time is not a 16:00 one -- while the bar
+    filter falls back to the 16:00 regular close.
     """
     observed_at = to_utc(observed_at)
     session_day = session_date_of(observed_at)
     opens, _ = session_bounds(session_day)
     closes_at = _session_close(session_close_at, session_day)
 
-    bars = session_minute_bars(minute_bars, observed_at=observed_at, session_day=session_day)
+    bars = session_minute_bars(
+        minute_bars,
+        observed_at=observed_at,
+        session_day=session_day,
+        session_close_at=session_close_at,
+    )
 
     # The latest completed regular-session bar, whatever its close turned out
     # to be: this is what bar_age_seconds describes.
