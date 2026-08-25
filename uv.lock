@@ -324,6 +324,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alpaca-py" },
     { name = "pydantic-settings" },
+    { name = "tzdata" },
 ]
 
 [package.dev-dependencies]
@@ -335,6 +336,7 @@ dev = [
 requires-dist = [
     { name = "alpaca-py", specifier = ">=0.33" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "tzdata", specifier = ">=2024.1" },
 ]
 
 [package.metadata.requires-dev]

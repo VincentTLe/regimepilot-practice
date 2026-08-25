@@ -7,6 +7,10 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     "alpaca-py>=0.33",
     "pydantic-settings>=2.0",
+    # The regular session is defined in America/New_York. Windows ships no IANA
+    # database, so zoneinfo needs this. It arrives transitively today; declared
+    # here so a dependency change cannot silently break session boundaries.
+    "tzdata>=2024.1",
 ]
 
 [dependency-groups]
