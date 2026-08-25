@@ -11,7 +11,7 @@ Every model is frozen: an observation is a record of what was true at
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict
 
@@ -128,3 +128,91 @@ class ObservationPacket(Observation):
     account: AccountSnapshot
     underlying: UnderlyingSnapshot
     option_universe: OptionUniverse
+
+
+class NewsItem(Observation):
+    """One filtered headline suitable for LLM briefing."""
+
+    id: int
+    headline: str
+    summary: str
+    age_minutes: float
+    symbols: tuple[str, ...] = ()
+    source: str | None = None
+
+
+class NewsPacket(Observation):
+    """Recent headlines for the underlying, capped and relevance-filtered."""
+
+    observed_at: UtcDatetime
+    available: bool = False
+    item_count: int = 0
+    items: tuple[NewsItem, ...] = ()
+
+
+class UnderlyingEvidence(Observation):
+    """Underlying feature context copied into an LLM briefing."""
+
+    market_is_open: bool | None = None
+    data_feed: str
+    minutes_since_open: float | None = None
+    minutes_to_close: float | None = None
+    spread_bps: float | None = None
+    bar_age_seconds: float | None = None
+    return_15m: float | None = None
+    return_60m: float | None = None
+    return_since_open: float | None = None
+    overnight_gap_pct: float | None = None
+    realized_vol_30m: float | None = None
+
+
+class GatesEvidence(Observation):
+    """Pre-gate outcome attached to one evidence packet."""
+
+    passed: bool
+    hold_reason: str | None = None
+    momentum_align: str = "unknown"
+    vol_regime: str = "unknown"
+    session_phase: str = "unknown"
+
+
+class NewsEvidence(Observation):
+    """News slice of an evidence packet."""
+
+    available: bool = False
+    item_count: int = 0
+    items: tuple[NewsItem, ...] = ()
+
+
+class AccountHint(Observation):
+    """Minimal account state needed before Phase 5 risk sizing."""
+
+    has_open_option_position: bool = False
+
+
+class EvidencePacket(Observation):
+    """One normalized briefing for LLM direction reasoning."""
+
+    observed_at: UtcDatetime
+    symbol: str = UNDERLYING_SYMBOL
+    gates: GatesEvidence
+    underlying: UnderlyingEvidence
+    news: NewsEvidence
+    account: AccountHint
+
+
+TradeAction = Literal["BUY_CALL", "BUY_PUT", "HOLD"]
+Confidence = Literal["low", "medium", "high"]
+
+
+class TradeProposal(Observation):
+    """Direction proposal from pre-gates or LLM reasoning. No execution details."""
+
+    observed_at: UtcDatetime
+    symbol: str = UNDERLYING_SYMBOL
+    action: TradeAction
+    confidence: Confidence
+    thesis: str
+    evidence_used: tuple[str, ...] = ()
+    gate_skipped: bool = False
+    model: str | None = None
