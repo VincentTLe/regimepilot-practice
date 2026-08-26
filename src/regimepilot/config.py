@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     alpaca_api_base_url: str = ""
     apca_api_base_url: str = ""
     alpaca_endpoint: str = ""
+    openrouter_api_key: SecretStr = SecretStr("")
 
     @property
     def paper(self) -> bool:
@@ -164,3 +165,14 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         )
 
     return settings
+
+
+def require_openrouter_api_key(settings: Settings) -> str:
+    """Return the OpenRouter key or refuse when live LLM reasoning is requested."""
+    key = settings.openrouter_api_key.get_secret_value().strip()
+    if not key:
+        raise ConfigError(
+            "Missing OPENROUTER_API_KEY. Add it to .env locally for live LLM decisions, "
+            "or run with --stub."
+        )
+    return key

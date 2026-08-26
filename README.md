@@ -6,20 +6,21 @@ Practice project for the **Alpaca AI Trading Agents Hackathon** (Aug 28 - Sep 4,
 > treat this folder as practice, not the official submission. The judged submission
 > must use a **fresh Alpaca paper account funded with exactly $100,000**.
 
-## Status: Phase 1 only
+## Status: Phase 3 complete
 
-Phase 1 is environment setup and read-only connectivity. Nothing else exists yet.
+Phase 3 adds read-only AI direction proposals (`BUY_CALL` / `BUY_PUT` / `HOLD`).
+No orders are submitted yet.
 
 | # | Phase | State |
 |---|---------------------------------------|-------------|
-| 1 | Environment and read-only connectivity | **current** |
-| 2 | Read-only market observer              | not started |
-| 3 | AI trade proposal, no execution        | not started |
+| 1 | Environment and read-only connectivity | done |
+| 2 | Read-only market observer + features | done |
+| 3 | AI trade proposal, no execution | **current** |
 | 4 | Deterministic contract selector + risk gate | not started |
-| 5 | Dry-run order generation               | not started |
-| 6 | Small paper options trade              | not started |
-| 7 | Autonomous 15-minute loop              | not started |
-| 8 | Dashboard and hackathon submission     | not started |
+| 5 | Dry-run order generation | not started |
+| 6 | Small paper options trade | not started |
+| 7 | Autonomous 15-minute loop | not started |
+| 8 | Dashboard and hackathon submission | not started |
 
 ## Safety rules this code enforces
 
@@ -63,6 +64,15 @@ uv sync
 
 3. Leave `ALPACA_PAPER=true`. Any other value stops the program.
 
+4. For live LLM decisions (optional in Phase 3), add an OpenRouter key from
+   <https://openrouter.ai/>:
+
+   ```dotenv
+   OPENROUTER_API_KEY=sk-or-...
+   ```
+
+   Use `--stub` if you do not have an OpenRouter key yet.
+
 Do not set `ALPACA_BASE_URL` or `APCA_API_BASE_URL`. If you do, they must point at
 `paper-api.alpaca.markets`; a live URL aborts startup.
 
@@ -80,51 +90,73 @@ Read-only connectivity check (needs a filled-in `.env`):
 uv run python -m regimepilot.smoke_test
 ```
 
-It prints one JSON object and nothing else on stdout:
+Phase 2 feature observation:
+
+```bash
+uv run python -m regimepilot.history
+uv run python -m regimepilot.history --json
+```
+
+Phase 3 modules:
+
+```bash
+# Filtered Alpaca news for SPY
+uv run python -m regimepilot.news --json
+
+# Full LLM briefing (features + news + pre-gates)
+uv run python -m regimepilot.evidence --json
+
+# Trade direction proposal
+uv run python -m regimepilot.decision --stub --json   # no OpenRouter key needed
+uv run python -m regimepilot.decision --json          # calls Ox Alpha via OpenRouter
+```
+
+`decision --json` prints one `TradeProposal`:
 
 ```json
 {
-  "timestamp": "2026-08-25T14:30:00+00:00",
-  "market_open": true,
-  "account_id_masked": "****8888",
-  "spy_bar_count": 7,
-  "spy_option_contract_count": 500,
-  "earliest_expiration": "2026-08-28",
-  "latest_expiration": "2026-09-08",
-  "checks": {
-    "config": "ok",
-    "clock": "ok",
-    "account": "ok",
-    "spy_bars": "ok",
-    "spy_option_contracts": "ok"
-  }
+  "observed_at": "2026-08-25T14:30:00+00:00",
+  "symbol": "SPY",
+  "action": "BUY_CALL",
+  "confidence": "medium",
+  "thesis": "Stub rule: 15m and 60m momentum align upward.",
+  "evidence_used": ["gates.momentum_align", "underlying.return_15m", "underlying.return_60m"],
+  "gate_skipped": false,
+  "model": "stub"
 }
 ```
 
-Check statuses are `ok`, `empty` (call succeeded, returned nothing), `error`, or
-`skipped`. On `error`, only the exception *type* is written to stderr, never its
-message, because HTTP client errors can quote the request that produced them.
-
-`spy_option_contract_count` counts the **first page** of active SPY contracts
-expiring in 3-14 days (page limit 500), which is enough to prove connectivity.
-`earliest_expiration` and `latest_expiration` describe only the contracts returned.
+Pre-gate failures return `action: "HOLD"` with `gate_skipped: true` without calling
+the LLM.
 
 ## Layout
 
 ```text
 .
-├── .env.example          # placeholders only, safe to commit
-├── .gitignore            # keeps .env out of Git
-├── .python-version       # pins uv to Python 3.11
+├── .env.example
 ├── pyproject.toml
 ├── README.md
 ├── src/regimepilot/
-│   ├── __init__.py
 │   ├── config.py         # credential loading + paper-trading guards
-│   └── smoke_test.py     # read-only connectivity check
+│   ├── smoke_test.py     # Phase 1 connectivity check
+│   ├── models.py         # frozen observation models
+│   ├── observer.py       # Phase 2A read-only market observer
+│   ├── features.py       # Phase 2B deterministic features
+│   ├── history.py        # Phase 2B Alpaca bar/quote reads
+│   ├── gates.py          # Phase 3A pre-gates + session labels
+│   ├── news.py           # Phase 3B filtered Alpaca news
+│   ├── evidence.py       # Phase 3C evidence briefing assembly
+│   └── decision.py       # Phase 3D LLM / stub trade proposal
 └── tests/
     ├── test_config.py
-    └── test_smoke_test.py
+    ├── test_smoke_test.py
+    ├── test_observer.py
+    ├── test_features.py
+    ├── test_history.py
+    ├── test_gates.py
+    ├── test_news.py
+    ├── test_evidence.py
+    └── test_decision.py
 ```
 
 ## Planned baseline (do not change without approval)
@@ -135,6 +167,7 @@ picks the exact contract and quantity. Every proposal passes hard risk checks.
 Execution is Alpaca paper only. Every decision is logged, including `HOLD` and
 rejected trades.
 
-Out of scope for now: multi-agent architectures, reinforcement learning, Jump or
-Hidden Markov Models, vertical spreads and multi-leg options, 0DTE, news and
-sentiment trading, multiple underlyings, automatic strategy optimization.
+Phase 3 now includes filtered Alpaca news as LLM context. Out of scope for now:
+multi-agent architectures, reinforcement learning, Jump or Hidden Markov Models,
+vertical spreads and multi-leg options, 0DTE, multiple underlyings, automatic
+strategy optimization.
