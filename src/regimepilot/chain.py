@@ -41,7 +41,7 @@ from alpaca.trading.enums import AssetStatus, ContractType
 from alpaca.trading.requests import GetOptionContractsRequest
 
 from regimepilot.config import ConfigError, Settings, load_settings
-from regimepilot.features import session_date_of, spread_bps, to_utc
+from regimepilot.features import quote_age_seconds, session_date_of, spread_bps, to_utc
 from regimepilot.history import HistoryError, fetch_latest_quote
 from regimepilot.models import UNDERLYING_SYMBOL, ChainPacket, ContractCandidate, TradeAction
 from regimepilot.smoke_test import build_clients
@@ -362,17 +362,6 @@ def _clock(value: datetime | None) -> str:
     return "-" if value is None else value.strftime("%H:%M:%SZ")
 
 
-def quote_age_seconds(candidate: ContractCandidate, reference: datetime) -> float | None:
-    """How old the candidate's quote was at ``reference``; never negative.
-
-    Pass ``packet.quotes_read_at`` (Alpaca's clock) when it exists; the
-    packet's ``observed_at`` is the local clock and only a fallback.
-    """
-    if candidate.quote_at is None:
-        return None
-    return max(0.0, (to_utc(reference) - candidate.quote_at).total_seconds())
-
-
 def format_summary(packet: ChainPacket) -> str:
     """One line per candidate: identity, quote, spread and quote age. No verdicts."""
     mid = packet.underlying_mid
@@ -423,7 +412,7 @@ def format_summary(packet: ChainPacket) -> str:
             f"  {str(candidate.expiration_date or '-'):<11}{dte:>4}{_number(strike):>9}"
             f"{_signed(moneyness):>8}{_number(bid):>8}{_number(ask):>8}{_number(spread):>8}"
             f"{_number(spread_bps(bid, ask), 1):>8}  {_clock(candidate.quote_at):<10}"
-            f"{_number(quote_age_seconds(candidate, reference), 1):>8}  {tradable}"
+            f"{_number(quote_age_seconds(candidate.quote_at, reference), 1):>8}  {tradable}"
         )
     return "\n".join(lines)
 

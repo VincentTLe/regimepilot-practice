@@ -27,9 +27,9 @@ from regimepilot.chain import (
     format_summary,
     main,
     observe_chain,
-    quote_age_seconds,
 )
 from regimepilot.config import ConfigError, settings_from_mapping
+from regimepilot.features import quote_age_seconds
 from regimepilot.models import ChainPacket, ContractCandidate
 
 # 10:35 New York on Wednesday 2026-08-26.
@@ -545,7 +545,7 @@ def test_quote_age_is_measured_against_the_alpaca_clock_not_the_local_one():
     assert packet.observed_at == NOW
     assert packet.quotes_read_at == server_now
     candidate = next(c for c in packet.candidates if c.symbol == "SPY260901C00765000")
-    assert quote_age_seconds(candidate, packet.quotes_read_at) == pytest.approx(1.5)
+    assert quote_age_seconds(candidate.quote_at, packet.quotes_read_at) == pytest.approx(1.5)
 
     rendered = format_summary(packet)
     assert "1.5" in rendered

@@ -6,18 +6,19 @@ Practice project for the **Alpaca AI Trading Agents Hackathon** (Aug 28 - Sep 4,
 > treat this folder as practice, not the official submission. The judged submission
 > must use a **fresh Alpaca paper account funded with exactly $100,000**.
 
-## Status: Phase 3 complete
+## Status: Phase 4 (contract selector) implemented
 
 Phase 3 adds read-only AI direction proposals (`BUY_CALL` / `BUY_PUT` / `HOLD`).
-No orders are submitted yet.
+Phase 4 turns a proposal into one exact SPY option contract with deterministic
+code. No orders are submitted yet.
 
 | # | Phase | State |
 |---|---------------------------------------|-------------|
 | 1 | Environment and read-only connectivity | done |
 | 2 | Read-only market observer + features | done |
-| 3 | AI trade proposal, no execution | **current** |
-| 4 | Deterministic contract selector + risk gate | not started |
-| 5 | Dry-run order generation | not started |
+| 3 | AI trade proposal, no execution | done |
+| 4 | Deterministic contract selector (4A chain observation, 4B selection) | **current** |
+| 5 | Risk gate + dry-run order generation | not started |
 | 6 | Small paper options trade | not started |
 | 7 | Autonomous 15-minute loop | not started |
 | 8 | Dashboard and hackathon submission | not started |
@@ -141,6 +142,24 @@ uv run python -m regimepilot.chain --action BUY_PUT --json
 at real indicative quotes during market hours before any selection threshold is
 chosen.
 
+Phase 4B contract selection (read-only; runs evidence -> proposal -> chain ->
+selection and prints one `SelectionResult`, or `--action` to select for a given
+direction without the LLM):
+
+```bash
+uv run python -m regimepilot.selector --stub                # rule-based proposal, no OpenRouter key
+uv run python -m regimepilot.selector --json                # LLM proposal, JSON result
+uv run python -m regimepilot.selector --action BUY_CALL     # skip the LLM, select for one direction
+```
+
+Selection rules (approved 2026-08-26): expiration with days-to-expiration
+nearest 7 within the 5-10 day window (ties go later), strike nearest the SPY
+midpoint (ties go in-the-money), quotes rejected when not tradable, missing,
+crossed, stamped in the future, older than 10 s by the server clock, or wider
+than 350 bps of mid; the nearest acceptable strike at the same expiration is
+taken instead, and the expiration is never changed. A `no_contract` result is a
+normal outcome. No quantity, no price, no order.
+
 ## Layout
 
 ```text
@@ -159,7 +178,9 @@ chosen.
 │   ├── news.py           # Phase 3B filtered Alpaca news
 │   ├── evidence.py       # Phase 3C evidence briefing assembly
 │   ├── decision.py       # Phase 3D LLM / stub trade proposal
-│   └── chain.py          # Phase 4A read-only option chain observation
+│   ├── console.py        # tolerant console output (non-UTF-8 terminals)
+│   ├── chain.py          # Phase 4A read-only option chain observation
+│   └── selector.py       # Phase 4B deterministic contract selection
 └── tests/
     ├── test_config.py
     ├── test_smoke_test.py
@@ -170,7 +191,9 @@ chosen.
     ├── test_news.py
     ├── test_evidence.py
     ├── test_decision.py
-    └── test_chain.py
+    ├── test_console.py
+    ├── test_chain.py
+    └── test_selector.py
 ```
 
 ## Planned baseline (do not change without approval)

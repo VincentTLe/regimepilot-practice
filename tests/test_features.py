@@ -9,7 +9,7 @@ Expected values are written as closed-form arithmetic on the fixture prices
 
 import math
 import socket
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -869,3 +869,21 @@ def test_the_bar_before_an_unusable_latest_close_is_not_promoted():
     assert packet.return_15m == pytest.approx(100.0 / 100.0 - 1)
     assert packet.return_since_open == pytest.approx(100.0 / 200.0 - 1)
     assert packet.realized_vol_30m == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------
+# quote age (shared by the chain observer and the contract selector)
+# --------------------------------------------------------------------------
+
+
+def test_quote_age_is_measured_from_the_reference_and_never_negative():
+    from regimepilot.features import quote_age_seconds
+
+    reference = datetime(2026, 8, 26, 14, 35, tzinfo=timezone.utc)
+
+    assert quote_age_seconds(None, reference) is None
+    assert quote_age_seconds(reference - timedelta(seconds=1.5), reference) == pytest.approx(1.5)
+    # A naive stamp is taken as UTC, like everywhere else in the package.
+    assert quote_age_seconds(datetime(2026, 8, 26, 14, 34, 50), reference) == pytest.approx(10.0)
+    # A stamp after the reference is clamped, not reported as a negative age.
+    assert quote_age_seconds(reference + timedelta(seconds=3), reference) == 0.0
