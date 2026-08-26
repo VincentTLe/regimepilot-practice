@@ -5,7 +5,7 @@ Read-only with respect to Alpaca trading: this module never submits orders.
 
 Two modes:
 * ``--stub`` uses deterministic rules for local learning and tests.
-* default calls OpenRouter (Ox Alpha with free fallback) when configured.
+* default calls OpenRouter through a fixed chain of named free models.
 """
 
 from __future__ import annotations
@@ -24,8 +24,22 @@ from regimepilot.models import Confidence, EvidencePacket, TradeAction, TradePro
 from regimepilot.news import build_news_client
 from regimepilot.smoke_test import build_clients
 
-PRIMARY_MODEL = "stealth/ox-alpha"
-FALLBACK_MODEL = "openrouter/free"
+# Chosen 2026-08-26 from live probes with the real prompt. The primary is the
+# paid GLM-5.3 Flash (what the retired ``stealth/ox-alpha`` turned out to be;
+# fractions of a cent per call); the fallbacks are named free models in
+# quality order. OpenRouter tries the list in order, falls through on rate
+# limits or downtime, and reports the model that answered in the response,
+# which lands in ``TradeProposal.model``. Every entry is named on purpose:
+# ``openrouter/free`` would pick an arbitrary model per request.
+#
+# OpenRouter accepts at most THREE entries in ``models``; a fourth is an
+# HTTP 400. ``z-ai/glm-5.2:free`` was left out for that reason: it was
+# rate-limited upstream on every probe, so it would only spend a slot.
+PRIMARY_MODEL = "z-ai/glm-5.3-flash"
+FALLBACK_MODELS = (
+    "minimax/minimax-m3:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+)
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 VALID_ACTIONS = frozenset({"BUY_CALL", "BUY_PUT", "HOLD"})
@@ -201,13 +215,17 @@ def call_openrouter(
     *,
     api_key: str,
     primary_model: str = PRIMARY_MODEL,
-    fallback_model: str = FALLBACK_MODEL,
+    fallback_models: Sequence[str] = FALLBACK_MODELS,
     transport: Callable[..., Any] | None = None,
 ) -> tuple[str, str]:
-    """Call OpenRouter chat completions and return ``(text, model_used)``."""
+    """Call OpenRouter chat completions and return ``(text, model_used)``.
+
+    ``models`` is OpenRouter's priority list: the primary first, then each
+    fallback in order. ``model_used`` is whichever of them actually answered.
+    """
     payload = {
         "model": primary_model,
-        "models": [primary_model, fallback_model],
+        "models": [primary_model, *fallback_models],
         "messages": list(messages),
         "response_format": {"type": "json_object"},
     }

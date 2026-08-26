@@ -108,7 +108,7 @@ uv run python -m regimepilot.evidence --json
 
 # Trade direction proposal
 uv run python -m regimepilot.decision --stub --json   # no OpenRouter key needed
-uv run python -m regimepilot.decision --json          # calls Ox Alpha via OpenRouter
+uv run python -m regimepilot.decision --json          # calls GLM-5.3 Flash via OpenRouter, free chain as fallback
 ```
 
 `decision --json` prints one `TradeProposal`:
