@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from regimepilot.config import ConfigError, Settings, load_settings, require_openrouter_api_key
+from regimepilot.console import tolerant_console
 from regimepilot.evidence import EvidenceError, format_summary as format_evidence_summary, observe_evidence
 from regimepilot.models import Confidence, EvidencePacket, TradeAction, TradeProposal
 from regimepilot.news import build_news_client
@@ -334,6 +335,7 @@ def format_summary(proposal: TradeProposal) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Observe evidence and print one TradeProposal."""
+    tolerant_console()
     arguments = list(sys.argv[1:] if argv is None else argv)
     use_stub = "--stub" in arguments
 

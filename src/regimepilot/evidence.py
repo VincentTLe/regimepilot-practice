@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from regimepilot.config import ConfigError, load_settings
+from regimepilot.console import tolerant_console
 from regimepilot.features import FeaturePacket, to_utc
 from regimepilot.gates import GateResult, evaluate_gates
 from regimepilot.history import HistoryError, observe_features
@@ -156,6 +157,7 @@ def format_summary(packet: EvidencePacket) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Print an EvidencePacket summary, or the packet itself with ``--json``."""
+    tolerant_console()
     arguments = list(sys.argv[1:] if argv is None else argv)
 
     try:

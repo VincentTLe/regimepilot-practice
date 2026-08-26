@@ -24,6 +24,7 @@ from alpaca.data.historical import NewsClient
 from alpaca.data.requests import NewsRequest
 
 from regimepilot.config import ConfigError, Settings, load_settings
+from regimepilot.console import tolerant_console
 from regimepilot.features import to_utc
 from regimepilot.models import UNDERLYING_SYMBOL, NewsItem, NewsPacket
 
@@ -235,6 +236,7 @@ def format_summary(packet: NewsPacket) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Print a NewsPacket summary, or the packet itself with ``--json``."""
+    tolerant_console()
     arguments = list(sys.argv[1:] if argv is None else argv)
 
     try:
