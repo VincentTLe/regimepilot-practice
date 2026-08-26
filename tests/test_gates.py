@@ -95,8 +95,6 @@ def test_a_healthy_packet_passes_all_gates():
     assert result.passed is True
     assert result.hold_reason is None
     assert result.labels.momentum_align == "aligned_up"
-    assert result.labels.vol_regime == "high"
-    assert result.labels.session_phase == "midday"
 
 
 def test_market_closed_holds():
@@ -187,3 +185,12 @@ def test_labels_survive_a_json_round_trip():
     labels = derive_labels(build())
     assert SessionLabels.model_validate_json(labels.model_dump_json()) == labels
     assert isinstance(build(), FeaturePacket)
+
+
+def test_labels_carry_only_threshold_free_tags():
+    """vol_regime / session_phase used unapproved numeric cutoffs and were removed."""
+    assert set(SessionLabels.model_fields) == {"momentum_align"}
+
+    banned = ("vol_regime", "volregime", "session_phase", "sessionphase")
+    offenders = [name for name in dir(gates_module) if any(word in name.lower() for word in banned)]
+    assert offenders == []

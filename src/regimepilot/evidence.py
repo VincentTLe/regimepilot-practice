@@ -64,8 +64,6 @@ def _gates_from_result(gates: GateResult) -> GatesEvidence:
         passed=gates.passed,
         hold_reason=gates.hold_reason,
         momentum_align=gates.labels.momentum_align,
-        vol_regime=gates.labels.vol_regime,
-        session_phase=gates.labels.session_phase,
     )
 
 
@@ -146,8 +144,7 @@ def format_summary(packet: EvidencePacket) -> str:
         f"RegimePilot evidence  {packet.symbol}  @ "
         f"{packet.observed_at.strftime('%Y-%m-%d %H:%M:%SZ')}",
         f"  {'gates':<16} {gate_state}",
-        f"  {'labels':<16} momentum={packet.gates.momentum_align}"
-        f"  vol={packet.gates.vol_regime}  phase={packet.gates.session_phase}",
+        f"  {'labels':<16} momentum={packet.gates.momentum_align}",
         f"  {'returns':<16} 15m={packet.underlying.return_15m!r}"
         f"  60m={packet.underlying.return_60m!r}",
         f"  {'news':<16} available={packet.news.available}  count={packet.news.item_count}",

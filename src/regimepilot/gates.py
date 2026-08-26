@@ -23,14 +23,10 @@ MIN_MINUTES_TO_CLOSE = 30
 # A completed bar older than this is too stale for intraday momentum features.
 MAX_BAR_AGE_SECONDS = 120
 
-# Realized-vol thresholds on the raw 30-minute measurement from features.py.
-# These are decimal values, not annualized percentages.
-VOL_REGIME_LOW_MAX = 0.003
-VOL_REGIME_MID_MAX = 0.008
-
+# The only label kept is sign-based and needs no numeric cutoff. Bucketed
+# labels (volatility regime, session phase) were removed because their
+# thresholds were never approved; do not reintroduce them without approval.
 MomentumAlign = Literal["aligned_up", "aligned_down", "mixed", "unknown"]
-VolRegime = Literal["low", "mid", "high", "unknown"]
-SessionPhase = Literal["open", "midday", "late", "unknown"]
 
 HoldReason = Literal[
     "market_closed",
@@ -45,8 +41,6 @@ class SessionLabels(Observation):
     """Human-readable tags derived from a FeaturePacket."""
 
     momentum_align: MomentumAlign = "unknown"
-    vol_regime: VolRegime = "unknown"
-    session_phase: SessionPhase = "unknown"
 
 
 class GateResult(Observation):
@@ -80,34 +74,10 @@ def derive_momentum_align(return_15m: float | None, return_60m: float | None) ->
     return "mixed"
 
 
-def derive_vol_regime(realized_vol_30m: float | None) -> VolRegime:
-    """Bucket the raw realized-vol measurement."""
-    if realized_vol_30m is None:
-        return "unknown"
-    if realized_vol_30m <= VOL_REGIME_LOW_MAX:
-        return "low"
-    if realized_vol_30m <= VOL_REGIME_MID_MAX:
-        return "mid"
-    return "high"
-
-
-def derive_session_phase(minutes_since_open: float | None) -> SessionPhase:
-    """Rough intraday phase from minutes elapsed since the regular open."""
-    if minutes_since_open is None:
-        return "unknown"
-    if minutes_since_open < 60:
-        return "open"
-    if minutes_since_open < 300:
-        return "midday"
-    return "late"
-
-
 def derive_labels(packet: FeaturePacket) -> SessionLabels:
     """Compute all session labels from one FeaturePacket."""
     return SessionLabels(
         momentum_align=derive_momentum_align(packet.return_15m, packet.return_60m),
-        vol_regime=derive_vol_regime(packet.realized_vol_30m),
-        session_phase=derive_session_phase(packet.minutes_since_open),
     )
 
 

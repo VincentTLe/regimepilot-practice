@@ -37,8 +37,6 @@ def build_evidence(*, passed=True, hold_reason=None, momentum_align="aligned_up"
             passed=passed,
             hold_reason=hold_reason,
             momentum_align=momentum_align,
-            vol_regime="mid",
-            session_phase="midday",
         ),
         underlying=UnderlyingEvidence(
             data_feed="iex",
@@ -193,3 +191,57 @@ def test_the_decision_module_exposes_no_trading_or_execution_helper():
         name for name in dir(decision_module) if any(word in name.lower() for word in forbidden)
     ]
     assert offenders == []
+
+
+class NotJsonResponse(FakeResponse):
+    def json(self):
+        raise ValueError("body is not JSON")
+
+
+@pytest.mark.parametrize("status", [401, 404, 429, 500])
+def test_call_openrouter_reports_the_http_status_without_secrets(status):
+    body = {"error": {"message": f"BODY-TEXT-{status} key={OPENROUTER_KEY}"}}
+
+    def fake_post(*args, **kwargs):
+        return FakeResponse(body, status_code=status)
+
+    with pytest.raises(DecisionError) as excinfo:
+        call_openrouter([], api_key=OPENROUTER_KEY, transport=fake_post)
+
+    text = str(excinfo.value)
+    assert f"HTTP {status}" in text
+    assert OPENROUTER_KEY not in text
+    assert "BODY-TEXT" not in text
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        [],
+        "text",
+        {},
+        {"choices": None},
+        {"choices": []},
+        {"choices": [None]},
+        {"choices": ["x"]},
+        {"choices": [{}]},
+        {"choices": [{"message": None}]},
+        {"choices": [{"message": {"content": ""}}]},
+        {"choices": [{"message": {"content": 5}}]},
+    ],
+)
+def test_call_openrouter_turns_a_malformed_body_into_decision_error(body):
+    def fake_post(*args, **kwargs):
+        return FakeResponse(body)
+
+    with pytest.raises(DecisionError):
+        call_openrouter([], api_key=OPENROUTER_KEY, transport=fake_post)
+
+
+def test_call_openrouter_turns_a_non_json_body_into_decision_error():
+    def fake_post(*args, **kwargs):
+        return NotJsonResponse({})
+
+    with pytest.raises(DecisionError):
+        call_openrouter([], api_key=OPENROUTER_KEY, transport=fake_post)

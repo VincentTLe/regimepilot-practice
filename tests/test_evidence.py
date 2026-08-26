@@ -11,7 +11,7 @@ from regimepilot.evidence import EvidenceError, build_evidence, observe_evidence
 from regimepilot.features import build_feature_packet
 from regimepilot.gates import evaluate_gates
 from regimepilot.history import HistoryError
-from regimepilot.models import EvidencePacket, NewsItem, NewsPacket, OhlcvBar
+from regimepilot.models import EvidencePacket, GatesEvidence, NewsItem, NewsPacket, OhlcvBar
 from regimepilot.news import NewsError, unavailable_news_packet
 
 NY = ZoneInfo("America/New_York")
@@ -183,3 +183,12 @@ def test_the_evidence_module_exposes_no_trading_or_execution_helper():
         if any(word in name.lower() for word in forbidden)
     ]
     assert offenders == []
+
+
+def test_evidence_gates_carry_no_threshold_based_labels():
+    """The briefing sent to the LLM must not include vol_regime / session_phase."""
+    assert set(GatesEvidence.model_fields) == {"passed", "hold_reason", "momentum_align"}
+
+    packet = build_evidence(build_features(), build_news(), evaluate_gates(build_features()))
+    assert "vol_regime" not in packet.model_dump_json()
+    assert "session_phase" not in packet.model_dump_json()

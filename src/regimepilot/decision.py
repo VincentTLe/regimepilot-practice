@@ -226,21 +226,53 @@ def call_openrouter(
             json=payload,
             timeout=60.0,
         )
-        response.raise_for_status()
-        body = response.json()
     except Exception as error:  # noqa: BLE001 - uniform external failure
         raise DecisionError(f"openrouter request failed: {type(error).__name__}") from None
 
-    model_used = str(body.get("model") or primary_model)
-    choices = body.get("choices") or []
-    if not choices:
+    # Only the status code is surfaced. The body and headers may quote the
+    # request, and an HTTP client's exception text may too, so neither is used.
+    status = getattr(response, "status_code", None)
+    if not isinstance(status, int):
+        raise DecisionError("openrouter response missing HTTP status")
+    if not 200 <= status < 300:
+        raise DecisionError(f"openrouter request failed: HTTP {status}")
+
+    try:
+        body = response.json()
+    except Exception as error:  # noqa: BLE001 - uniform external failure
+        raise DecisionError(f"openrouter response was not JSON: {type(error).__name__}") from None
+
+    return _completion_text(body, primary_model=primary_model)
+
+
+def _completion_text(body: Any, *, primary_model: str) -> tuple[str, str]:
+    """Validate the chat-completion shape; any deviation is a ``DecisionError``.
+
+    Every access is type-checked first, so a null, list or otherwise malformed
+    body can never escape as ``AttributeError`` / ``IndexError``.
+    """
+    if not isinstance(body, dict):
+        raise DecisionError("openrouter response malformed: body is not an object")
+
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
         raise DecisionError("openrouter response missing choices")
 
-    message = choices[0].get("message") or {}
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise DecisionError("openrouter response malformed: choice is not an object")
+
+    message = first.get("message")
+    if not isinstance(message, dict):
+        raise DecisionError("openrouter response missing message")
+
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
         raise DecisionError("openrouter response missing content")
 
+    model_used = body.get("model")
+    if not isinstance(model_used, str) or not model_used.strip():
+        model_used = primary_model
     return content, model_used
 
 

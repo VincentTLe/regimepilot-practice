@@ -127,6 +127,19 @@ def headline_is_relevant(
     return bool(words & MACRO_KEYWORDS)
 
 
+def _rows(response: Any) -> list[Any]:
+    """Pull the article list out of the SDK reply.
+
+    ``NewsClient.get_news`` returns a ``NewsSet`` (a ``BaseDataSet``) whose
+    payload lives under ``.data["news"]``; the object has no ``.news``
+    attribute. A raw dict reply (``raw_data=True``) carries the same ``"news"``
+    key at the top level. Mirrors ``history._rows`` so both Alpaca boundaries
+    unwrap a reply the same way.
+    """
+    data = response if isinstance(response, dict) else getattr(response, "data", None)
+    return list((data or {}).get("news") or [])
+
+
 def fetch_news(
     news_client: Any,
     *,
@@ -135,7 +148,7 @@ def fetch_news(
     lookback_hours: int = NEWS_LOOKBACK_HOURS,
     limit: int = NEWS_FETCH_LIMIT,
 ) -> list[Any]:
-    """Fetch raw news rows from Alpaca for one symbol window."""
+    """Fetch raw SDK ``News`` rows from Alpaca for one symbol window."""
     observed_at = to_utc(observed_at) if observed_at else datetime.now(timezone.utc)
     start = observed_at - timedelta(hours=lookback_hours)
 
@@ -148,13 +161,7 @@ def fetch_news(
         include_content=False,
     )
     response = _guarded(f"{symbol} news", lambda: news_client.get_news(request))
-
-    if isinstance(response, dict):
-        news_rows = response.get("news") or []
-    else:
-        news_rows = getattr(response, "news", None) or []
-
-    return list(news_rows)
+    return _rows(response)
 
 
 def build_news_packet(

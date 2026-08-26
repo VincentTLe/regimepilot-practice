@@ -1,10 +1,15 @@
-"""News tests: the Alpaca boundary of Phase 3B."""
+"""News tests: the Alpaca boundary of Phase 3B.
+
+The fake client returns the SDK's own ``NewsSet`` wrapper, built offline from
+API-shaped dicts, so every test here sees the exact response shape production
+sees -- articles under ``response.data["news"]`` -- never a hand-rolled stand-in.
+"""
 
 import traceback
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 import pytest
+from alpaca.data.models.news import News, NewsSet
 from alpaca.data.requests import NewsRequest
 
 from regimepilot import news as news_module
@@ -18,41 +23,47 @@ from regimepilot.news import (
     unavailable_news_packet,
 )
 
-NY = ZoneInfo("America/New_York")
 OBSERVED_AT = datetime(2026, 8, 24, 14, 0, tzinfo=timezone.utc)
 
 API_KEY = "SUPER-SECRET-KEY"
 SECRET_KEY = "SUPER-SECRET-SECRET"
 
 
-class FakeNews:
-    def __init__(
-        self,
-        *,
-        article_id,
-        headline,
-        summary=None,
-        symbols=None,
-        source="benzinga",
-        created_at=None,
-        content="<p>secret html</p>",
-    ):
-        self.id = article_id
-        self.headline = headline
-        self.summary = summary or headline
-        self.symbols = symbols or ["SPY"]
-        self.source = source
-        self.created_at = created_at or datetime(2026, 8, 24, 13, 30, tzinfo=timezone.utc)
-        self.updated_at = self.created_at
-        self.author = "desk"
-        self.content = content
-        self.url = "https://example.com/news"
-        self.images = []
+def article(
+    *,
+    article_id,
+    headline,
+    summary=None,
+    symbols=None,
+    source="benzinga",
+    created_at=None,
+    content="<p>secret html</p>",
+):
+    """One article exactly as the /v1beta1/news endpoint returns it."""
+    stamp = (created_at or datetime(2026, 8, 24, 13, 30, tzinfo=timezone.utc)).isoformat()
+    return {
+        "id": article_id,
+        "headline": headline,
+        "summary": summary or headline,
+        "symbols": symbols or ["SPY"],
+        "source": source,
+        "created_at": stamp,
+        "updated_at": stamp,
+        "author": "desk",
+        "content": content,
+        "url": "https://example.com/news",
+        "images": [],
+    }
 
 
-class FakeNewsResponse:
-    def __init__(self, articles):
-        self.news = list(articles)
+def sdk_news(**kwargs):
+    """The SDK ``News`` model for one article, exactly as ``NewsSet`` builds it."""
+    return News(raw_data=article(**kwargs))
+
+
+def sdk_response(articles):
+    """The real SDK wrapper that ``NewsClient.get_news`` returns, built offline."""
+    return NewsSet({"news": list(articles), "next_page_token": None})
 
 
 class FakeNewsClient:
@@ -67,7 +78,46 @@ class FakeNewsClient:
         self.last_request = request
         if self.fail:
             raise RuntimeError(f"401 unauthorized for key={API_KEY} secret={SECRET_KEY}")
-        return FakeNewsResponse(self.articles)
+        return sdk_response(self.articles)
+
+
+def test_fetch_news_reads_articles_from_the_real_sdk_newsset():
+    """Regression: NewsSet keeps articles under .data["news"] and has no .news attribute."""
+    response = sdk_response([article(article_id=1, headline="SPY steady")])
+    assert not hasattr(response, "news")
+    assert len(response.data["news"]) == 1
+
+    client = FakeNewsClient([article(article_id=1, headline="SPY steady")])
+    rows = fetch_news(client, observed_at=OBSERVED_AT)
+
+    assert len(rows) == 1
+    assert isinstance(rows[0], News)
+    assert rows[0].headline == "SPY steady"
+
+
+def test_observe_news_carries_the_articles_the_sdk_wrapper_returned():
+    client = FakeNewsClient(
+        [
+            article(
+                article_id=7,
+                headline="SPY update",
+                created_at=datetime(2026, 8, 24, 13, 50, tzinfo=timezone.utc),
+            ),
+            article(
+                article_id=8,
+                headline="Fed holds rates steady",
+                symbols=["QQQ"],
+                created_at=datetime(2026, 8, 24, 13, 40, tzinfo=timezone.utc),
+            ),
+        ]
+    )
+
+    packet = observe_news(client, now=OBSERVED_AT)
+
+    assert packet.available is True
+    assert packet.item_count == 2
+    assert [item.id for item in packet.items] == [7, 8]
+    assert [item.age_minutes for item in packet.items] == [10.0, 20.0]
 
 
 def test_headline_is_relevant_for_spy_symbol_or_macro_keyword():
@@ -78,12 +128,12 @@ def test_headline_is_relevant_for_spy_symbol_or_macro_keyword():
 
 def test_build_news_packet_filters_sorts_and_caps_items():
     articles = [
-        FakeNews(article_id=1, headline="Old SPY move", created_at=datetime(2026, 8, 24, 10, 0, tzinfo=timezone.utc)),
-        FakeNews(article_id=2, headline="Fresh SPY move", created_at=datetime(2026, 8, 24, 13, 45, tzinfo=timezone.utc)),
-        FakeNews(article_id=3, headline="Irrelevant headline", symbols=["AAPL"], created_at=datetime(2026, 8, 24, 13, 50, tzinfo=timezone.utc)),
-        FakeNews(article_id=4, headline="Fed comments lift index ETFs", symbols=["QQQ"], created_at=datetime(2026, 8, 24, 13, 55, tzinfo=timezone.utc)),
-        FakeNews(article_id=5, headline="SPY five", created_at=datetime(2026, 8, 24, 13, 40, tzinfo=timezone.utc)),
-        FakeNews(article_id=6, headline="SPY six", created_at=datetime(2026, 8, 24, 13, 35, tzinfo=timezone.utc)),
+        sdk_news(article_id=1, headline="Old SPY move", created_at=datetime(2026, 8, 24, 10, 0, tzinfo=timezone.utc)),
+        sdk_news(article_id=2, headline="Fresh SPY move", created_at=datetime(2026, 8, 24, 13, 45, tzinfo=timezone.utc)),
+        sdk_news(article_id=3, headline="Irrelevant headline", symbols=["AAPL"], created_at=datetime(2026, 8, 24, 13, 50, tzinfo=timezone.utc)),
+        sdk_news(article_id=4, headline="Fed comments lift index ETFs", symbols=["QQQ"], created_at=datetime(2026, 8, 24, 13, 55, tzinfo=timezone.utc)),
+        sdk_news(article_id=5, headline="SPY five", created_at=datetime(2026, 8, 24, 13, 40, tzinfo=timezone.utc)),
+        sdk_news(article_id=6, headline="SPY six", created_at=datetime(2026, 8, 24, 13, 35, tzinfo=timezone.utc)),
     ]
 
     packet = build_news_packet(articles, observed_at=OBSERVED_AT)
@@ -95,7 +145,7 @@ def test_build_news_packet_filters_sorts_and_caps_items():
 
 
 def test_fetch_news_sends_the_expected_request_window():
-    client = FakeNewsClient([FakeNews(article_id=1, headline="SPY steady")])
+    client = FakeNewsClient([article(article_id=1, headline="SPY steady")])
     rows = fetch_news(client, observed_at=OBSERVED_AT, symbol="SPY")
 
     assert len(rows) == 1
@@ -146,7 +196,7 @@ def test_the_news_module_exposes_no_trading_or_execution_helper():
 
 
 def test_a_successful_observation_serializes_without_credentials():
-    client = FakeNewsClient([FakeNews(article_id=7, headline="SPY update")])
+    client = FakeNewsClient([article(article_id=7, headline="SPY update")])
     packet = observe_news(client, now=OBSERVED_AT)
     blob = packet.model_dump_json()
 

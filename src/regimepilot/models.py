@@ -172,8 +172,6 @@ class GatesEvidence(Observation):
     passed: bool
     hold_reason: str | None = None
     momentum_align: str = "unknown"
-    vol_regime: str = "unknown"
-    session_phase: str = "unknown"
 
 
 class NewsEvidence(Observation):
