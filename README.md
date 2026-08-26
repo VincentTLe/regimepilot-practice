@@ -129,6 +129,18 @@ uv run python -m regimepilot.decision --json          # calls GLM-5.3 Flash via 
 Pre-gate failures return `action: "HOLD"` with `gate_skipped: true` without calling
 the LLM.
 
+Phase 4A chain observation (read-only; prints the SPY contracts around the money
+for one direction with bid, ask, spread and quote age, and judges nothing):
+
+```bash
+uv run python -m regimepilot.chain --action BUY_CALL
+uv run python -m regimepilot.chain --action BUY_PUT --json
+```
+
+`--action` is required and never comes from the LLM: this command exists to look
+at real indicative quotes during market hours before any selection threshold is
+chosen.
+
 ## Layout
 
 ```text
@@ -146,7 +158,8 @@ the LLM.
 │   ├── gates.py          # Phase 3A pre-gates + session labels
 │   ├── news.py           # Phase 3B filtered Alpaca news
 │   ├── evidence.py       # Phase 3C evidence briefing assembly
-│   └── decision.py       # Phase 3D LLM / stub trade proposal
+│   ├── decision.py       # Phase 3D LLM / stub trade proposal
+│   └── chain.py          # Phase 4A read-only option chain observation
 └── tests/
     ├── test_config.py
     ├── test_smoke_test.py
@@ -156,7 +169,8 @@ the LLM.
     ├── test_gates.py
     ├── test_news.py
     ├── test_evidence.py
-    └── test_decision.py
+    ├── test_decision.py
+    └── test_chain.py
 ```
 
 ## Planned baseline (do not change without approval)

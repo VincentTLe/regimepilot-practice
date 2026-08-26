@@ -214,3 +214,48 @@ class TradeProposal(Observation):
     evidence_used: tuple[str, ...] = ()
     gate_skipped: bool = False
     model: str | None = None
+
+
+class ContractCandidate(Observation):
+    """One option contract near the money, with the quote it had when observed.
+
+    Identity comes from the Trading API contract list, the quote from the
+    option snapshot feed. Any field but ``symbol`` may be null if the feed had
+    nothing to say. Deliberately carries no greek, no implied volatility, no
+    open interest and no verdict: Phase 4A observes what is on offer, it does
+    not judge it.
+    """
+
+    symbol: str
+    option_type: str | None = None
+    strike_price: float | None = None
+    expiration_date: date | None = None
+    days_to_expiration: int | None = None
+    status: str | None = None
+    tradable: bool | None = None
+    bid: float | None = None
+    ask: float | None = None
+    quote_at: UtcDatetime | None = None
+
+
+class ChainPacket(Observation):
+    """The narrow slice of the option chain one proposal direction looks at.
+
+    ``underlying_mid`` is the SPY midpoint the strike window was built around.
+    ``None`` means there was no usable SPY quote, and then there are no
+    candidates because there was no window to query. ``candidates`` is a
+    tuple for the same reason ``OptionUniverse.contracts`` is.
+
+    ``observed_at`` is the observing machine's clock; ``quotes_read_at`` is
+    Alpaca's own clock, read right after the quotes arrived. Quote ages are
+    measured against the latter, because the machine's clock was found to be
+    fourteen seconds slow and a freshness threshold must not inherit that.
+    """
+
+    observed_at: UtcDatetime
+    symbol: str = UNDERLYING_SYMBOL
+    action: TradeAction
+    option_feed: str
+    underlying_mid: float | None = None
+    quotes_read_at: UtcDatetime | None = None
+    candidates: tuple[ContractCandidate, ...] = ()
