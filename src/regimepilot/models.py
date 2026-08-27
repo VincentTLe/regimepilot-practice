@@ -411,3 +411,171 @@ class AccountState(Observation):
                 "does not agree with the open orders listed"
             )
         return self
+
+
+# ---------------------------------------------------------------------------
+# MVP execution models (methodology approved 2026-08-27). One vertical slice:
+# selection -> fresh re-check -> deterministic risk -> OrderPlan -> optional
+# paper submission -> one CycleRecord per cycle. The LLM touches none of these.
+# ---------------------------------------------------------------------------
+
+
+class FreshQuote(Observation):
+    """The chosen contract re-quoted immediately before an order.
+
+    ``server_time`` is Alpaca's clock read right after the quote, so the age
+    is measured the way Phase 4 measured it. ``reject_reason`` is the verdict
+    of the same rules ``selector.judge_candidate`` applies (identity taken
+    from the ``SelectedContract``, bid/ask/timestamp from the fresh snapshot);
+    ``None`` means the quote is acceptable to order against.
+    """
+
+    symbol: str
+    bid: float | None = None
+    ask: float | None = None
+    quote_at: UtcDatetime | None = None
+    server_time: UtcDatetime | None = None
+    reject_reason: RejectReason | None = None
+
+
+class ExecutionState(Observation):
+    """Everything re-read right before an order: account, clock, fresh quote.
+
+    Exists only when every read succeeded; a failed read is an error in the
+    reader, never a partial state here. ``minutes_to_close`` is measured on
+    Alpaca's clock (``next_close - timestamp``), not the local one.
+    """
+
+    observed_at: UtcDatetime
+    account: AccountState
+    market_is_open: bool | None = None
+    minutes_to_close: float | None = None
+    quote: FreshQuote
+
+
+class OrderPlan(Observation):
+    """One fully deterministic single-leg option order. Nothing here comes from the LLM.
+
+    Fixed by the approved methodology: buy to open, limit, day. ``qty`` and
+    ``limit_price`` are set by ``risk.decide_order`` alone.
+    ``max_premium_usd`` is ``limit_price * 100 * qty``, the most this order can cost.
+    """
+
+    symbol: str
+    side: Literal["buy"] = "buy"
+    qty: int
+    order_type: Literal["limit"] = "limit"
+    time_in_force: Literal["day"] = "day"
+    position_intent: Literal["buy_to_open"] = "buy_to_open"
+    limit_price: float
+    max_premium_usd: float
+    client_order_id: str
+
+    @model_validator(mode="after")
+    def _plan_is_internally_consistent(self) -> OrderPlan:
+        if self.qty < 1:
+            raise ValueError(f"qty must be at least 1, got {self.qty}")
+        if self.limit_price <= 0:
+            raise ValueError(f"limit_price must be positive, got {self.limit_price}")
+        expected = round(self.limit_price * 100 * self.qty, 2)
+        if round(self.max_premium_usd, 2) != expected:
+            raise ValueError(
+                f"max_premium_usd={self.max_premium_usd} does not equal "
+                f"limit_price * 100 * qty = {expected}"
+            )
+        if not self.client_order_id:
+            raise ValueError("client_order_id must not be empty")
+        return self
+
+
+RiskReason = Literal[
+    "no_contract",
+    "existing_spy_option_position",
+    "existing_spy_option_order",
+    "market_closed",
+    "too_close_to_close",
+    "unacceptable_quote",
+    "premium_over_cap",
+    "insufficient_options_buying_power",
+    "unknown_buying_power",
+]
+
+
+class RiskDecision(Observation):
+    """Whether an order may be built, and the plan if so.
+
+    ``approved`` carries a plan and no reason; a refusal carries a reason and
+    no plan. The two must agree, so a caller can never submit a refusal.
+    """
+
+    approved: bool
+    reason: RiskReason | None = None
+    plan: OrderPlan | None = None
+
+    @model_validator(mode="after")
+    def _approval_agrees_with_its_fields(self) -> RiskDecision:
+        if self.approved and (self.plan is None or self.reason is not None):
+            raise ValueError("an approved decision must carry a plan and no reason")
+        if not self.approved and (self.plan is not None or self.reason is None):
+            raise ValueError("a refused decision must carry a reason and no plan")
+        return self
+
+
+class OrderReceipt(Observation):
+    """What Alpaca said about one submitted order. Never the request itself.
+
+    ``submitted`` is true only when Alpaca returned an order. Fill fields come
+    from the single read-back after submission and may still be zero/None:
+    a paper fill is simulated and is not required for the cycle to count.
+    ``error`` names only an exception type, never upstream text.
+    """
+
+    submitted: bool
+    order_id: str | None = None
+    client_order_id: str | None = None
+    status: str | None = None
+    submitted_at: UtcDatetime | None = None
+    filled_qty: float | None = None
+    filled_avg_price: float | None = None
+    error: str | None = None
+
+
+RunMode = Literal["dry_run", "execute"]
+CycleOutcome = Literal["hold", "no_contract", "rejected", "planned", "submitted", "error"]
+
+
+class CycleRecord(Observation):
+    """One line of the cycle journal: everything one cycle saw and decided.
+
+    ``outcome`` is the headline: ``hold`` (gates or proposal), ``no_contract``
+    (selector), ``rejected`` (risk), ``planned`` (approved, dry run),
+    ``submitted`` (approved and Alpaca accepted the order), ``error`` (a read
+    or the submission failed; ``error`` names the step and exception type).
+    """
+
+    cycle_id: str
+    started_at: UtcDatetime
+    finished_at: UtcDatetime
+    mode: RunMode
+    outcome: CycleOutcome
+    forced_action: TradeAction | None = None
+    proposal: TradeProposal | None = None
+    selection: SelectionResult | None = None
+    execution_state: ExecutionState | None = None
+    risk: RiskDecision | None = None
+    receipt: OrderReceipt | None = None
+    error: str | None = None
+
+    @model_validator(mode="after")
+    def _outcome_agrees_with_its_fields(self) -> CycleRecord:
+        if (self.outcome == "error") != (self.error is not None):
+            raise ValueError("outcome 'error' must carry an error message, and only then")
+        if self.outcome == "submitted" and not (self.receipt is not None and self.receipt.submitted):
+            raise ValueError("outcome 'submitted' requires a receipt with submitted=True")
+        if self.outcome == "planned" and not (self.risk is not None and self.risk.approved):
+            raise ValueError("outcome 'planned' requires an approved risk decision")
+        if self.outcome == "rejected" and not (self.risk is not None and not self.risk.approved):
+            raise ValueError("outcome 'rejected' requires a refused risk decision")
+        if self.outcome in ("planned", "rejected", "hold", "no_contract") and self.receipt is not None:
+            raise ValueError(f"outcome {self.outcome!r} cannot carry an order receipt")
+        return self
