@@ -6,19 +6,22 @@ Practice project for the **Alpaca AI Trading Agents Hackathon** (Aug 28 - Sep 4,
 > treat this folder as practice, not the official submission. The judged submission
 > must use a **fresh Alpaca paper account funded with exactly $100,000**.
 
-## Status: Phase 4 (contract selector) implemented
+## Status: Phase 5A (paper account state) implemented
 
 Phase 3 adds read-only AI direction proposals (`BUY_CALL` / `BUY_PUT` / `HOLD`).
 Phase 4 turns a proposal into one exact SPY option contract with deterministic
-code. No orders are submitted yet.
+code. Phase 5A reads the real paper account (positions, open orders, equity,
+options buying power) so the `already_in_position` pre-gate holds on a real SPY
+option position instead of a placeholder. No orders are submitted yet.
 
 | # | Phase | State |
 |---|---------------------------------------|-------------|
 | 1 | Environment and read-only connectivity | done |
 | 2 | Read-only market observer + features | done |
 | 3 | AI trade proposal, no execution | done |
-| 4 | Deterministic contract selector (4A chain observation, 4B selection) | **current** |
-| 5 | Risk gate + dry-run order generation | not started |
+| 4 | Deterministic contract selector (4A chain observation, 4B selection) | done |
+| 5A | Read-only paper account state (positions, open orders, balances) | **current** |
+| 5B | Risk gate + dry-run order generation | not started |
 | 6 | Small paper options trade | not started |
 | 7 | Autonomous 15-minute loop | not started |
 | 8 | Dashboard and hackathon submission | not started |
@@ -160,6 +163,22 @@ than 350 bps of mid; the nearest acceptable strike at the same expiration is
 taken instead, and the expiration is never changed. A `no_contract` result is a
 normal outcome. No quantity, no price, no order.
 
+Phase 5A account state (read-only; prints the paper account's equity, options
+buying power, every open position and every open order, and whether any of them
+is a SPY option contract):
+
+```bash
+uv run python -m regimepilot.account
+uv run python -m regimepilot.account --json
+```
+
+A SPY option is an `us_option` position or order whose OCC root symbol is exactly
+`SPY` (the same filter Phase 4A queries contracts with). The `already_in_position`
+pre-gate now holds whenever such a position exists, so `evidence`, `decision` and
+`selector` all see the real account. Open SPY option orders are recorded but do
+not change the gate yet (a Phase 5B decision). If any account read fails, the
+whole cycle stops with an error rather than assuming an empty account.
+
 ## Layout
 
 ```text
@@ -180,7 +199,8 @@ normal outcome. No quantity, no price, no order.
 │   ├── decision.py       # Phase 3D LLM / stub trade proposal
 │   ├── console.py        # tolerant console output (non-UTF-8 terminals)
 │   ├── chain.py          # Phase 4A read-only option chain observation
-│   └── selector.py       # Phase 4B deterministic contract selection
+│   ├── selector.py       # Phase 4B deterministic contract selection
+│   └── account.py        # Phase 5A read-only paper account state
 └── tests/
     ├── test_config.py
     ├── test_smoke_test.py
@@ -193,7 +213,8 @@ normal outcome. No quantity, no price, no order.
     ├── test_decision.py
     ├── test_console.py
     ├── test_chain.py
-    └── test_selector.py
+    ├── test_selector.py
+    └── test_account.py
 ```
 
 ## Planned baseline (do not change without approval)
