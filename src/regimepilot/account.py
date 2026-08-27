@@ -179,12 +179,20 @@ def normalize_order(order: Any) -> OpenOrderSummary:
     """Keep the identity of one open order.
 
     A multi-leg parent carries no symbol of its own and is judged by its
-    legs; without them it cannot be judged, which is an ``AccountError``.
+    legs; without them it cannot be judged, which is an ``AccountError``. So
+    is an option order or leg whose symbol is not an OCC symbol: an
+    unclassifiable option must not read as "not SPY".
     """
     symbol = _field(order, "symbol")
     legs = list(_field(order, "legs") or [])
     if symbol is None and not legs:
         raise AccountError("failed to read open orders: an order has no symbol and no legs")
+    for line in (order, *legs):
+        if (
+            _as_text(_field(line, "asset_class")) == OPTION_ASSET_CLASS
+            and occ_root(_field(line, "symbol")) is None
+        ):
+            raise AccountError("failed to read open orders: an option order has an unrecognized symbol")
 
     return OpenOrderSummary(
         order_id=str(_field(order, "id") or ""),

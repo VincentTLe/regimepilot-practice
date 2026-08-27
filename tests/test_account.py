@@ -402,6 +402,24 @@ def test_an_option_position_with_an_unrecognized_symbol_is_an_error(symbol):
     assert "positions" in str(caught.value)
 
 
+@pytest.mark.parametrize("symbol", ["SPY1260902C00765000", None], ids=["adjusted-root", "missing"])
+def test_an_option_order_with_an_unrecognized_symbol_is_an_error(symbol):
+    with pytest.raises(AccountError) as caught:
+        observe_with(orders=[FakeOrder(symbol=symbol)])
+
+    assert "open orders" in str(caught.value)
+
+
+@pytest.mark.parametrize("symbol", ["SPY1260902C00765000", None], ids=["adjusted-root", "missing"])
+def test_an_option_leg_with_an_unrecognized_symbol_is_an_error(symbol):
+    parent = FakeOrder(symbol=None, asset_class=None, side=None, legs=[FakeOrder(symbol=symbol, order_id="leg-1")])
+
+    with pytest.raises(AccountError) as caught:
+        observe_with(orders=[parent])
+
+    assert "open orders" in str(caught.value)
+
+
 def test_a_multi_leg_order_without_its_legs_is_an_error():
     with pytest.raises(AccountError) as caught:
         observe_with(orders=[FakeOrder(symbol=None, asset_class=None, legs=None)])
