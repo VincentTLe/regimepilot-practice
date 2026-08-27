@@ -405,12 +405,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         # Journal first: the record must survive a console that cannot print it.
         append_record(record, args.journal)
+        # flush: a loop piped to a file or `tee` must show each cycle as it
+        # ends, not when the process exits.
         if not args.as_json:
-            print(format_summary(record))
+            print(format_summary(record), flush=True)
         elif args.loop:
-            print(record.model_dump_json())
+            print(record.model_dump_json(), flush=True)
         else:
-            print(json.dumps(json.loads(record.model_dump_json()), indent=2))
+            print(json.dumps(json.loads(record.model_dump_json()), indent=2), flush=True)
         return record
 
     if args.loop:
