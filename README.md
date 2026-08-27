@@ -6,13 +6,15 @@ Practice project for the **Alpaca AI Trading Agents Hackathon** (Aug 28 - Sep 4,
 > treat this folder as practice, not the official submission. The judged submission
 > must use a **fresh Alpaca paper account funded with exactly $100,000**.
 
-## Status: Phase 5A (paper account state) implemented
+## Status: MVP end-to-end (dry run + paper execution + 15-minute loop)
 
 Phase 3 adds read-only AI direction proposals (`BUY_CALL` / `BUY_PUT` / `HOLD`).
 Phase 4 turns a proposal into one exact SPY option contract with deterministic
 code. Phase 5A reads the real paper account (positions, open orders, equity,
 options buying power) so the `already_in_position` pre-gate holds on a real SPY
-option position instead of a placeholder. No orders are submitted yet.
+option position instead of a placeholder. The MVP `runner` adds the fresh
+re-check, the risk decision, the paper order and the 15-minute loop (see
+"Run the MVP" below).
 
 | # | Phase | State |
 |---|---------------------------------------|-------------|
@@ -20,10 +22,8 @@ option position instead of a placeholder. No orders are submitted yet.
 | 2 | Read-only market observer + features | done |
 | 3 | AI trade proposal, no execution | done |
 | 4 | Deterministic contract selector (4A chain observation, 4B selection) | done |
-| 5A | Read-only paper account state (positions, open orders, balances) | **current** |
-| 5B | Risk gate + dry-run order generation | not started |
-| 6 | Small paper options trade | not started |
-| 7 | Autonomous 15-minute loop | not started |
+| 5A | Read-only paper account state (positions, open orders, balances) | done |
+| 5B-7 | MVP: fresh re-check + risk + OrderPlan + paper execution + 15-minute loop (`runner`) | **current** |
 | 8 | Dashboard and hackathon submission | not started |
 
 ## Safety rules this code enforces
@@ -35,8 +35,8 @@ option position instead of a placeholder. No orders are submitted yet.
 - `TradingClient` is always constructed with `paper=True` hard-coded, so no
   environment value can flip it to live.
 - Credentials live in `SecretStr` and are never printed or logged.
-- There is **no** function to submit, cancel or replace an order, and none to close
-  or exercise a position. Do not add one before the phase that calls for it.
+- `execution.submit_paper_order` is the **only** function that submits an order, and it
+  runs only under `runner --execute`. Nothing cancels, replaces, closes or exercises.
 - Unit tests make **no** network calls.
 
 ## Setup
@@ -175,9 +175,40 @@ uv run python -m regimepilot.account --json
 A SPY option is an `us_option` position or order whose OCC root symbol is exactly
 `SPY` (the same filter Phase 4A queries contracts with). The `already_in_position`
 pre-gate now holds whenever such a position exists, so `evidence`, `decision` and
-`selector` all see the real account. Open SPY option orders are recorded but do
-not change the gate yet (a Phase 5B decision). If any account read fails, the
-whole cycle stops with an error rather than assuming an empty account.
+`selector` all see the real account. An open SPY option order does not hold the
+pre-gate, but the MVP risk decision refuses to plan while one exists. If any
+account read fails, the whole cycle stops with an error rather than assuming an
+empty account.
+
+## Run the MVP (one cycle end to end)
+
+One command runs evidence -> gates -> proposal -> chain -> selection -> fresh
+re-check -> risk -> `OrderPlan`, prints the result and appends one JSON line to
+`logs/cycles.jsonl` (git-ignored). The default is a **dry run**: nothing is
+submitted.
+
+```bash
+uv run python -m regimepilot.runner --stub                 # rule-based proposal, dry run
+uv run python -m regimepilot.runner                        # LLM proposal, dry run
+uv run python -m regimepilot.runner --action BUY_CALL      # force a direction AFTER the gates pass
+uv run python -m regimepilot.runner --action BUY_CALL --execute   # ONE real PAPER order
+uv run python -m regimepilot.runner --loop --execute       # repeat every 15 minutes until Ctrl-C
+uv run python -m regimepilot.runner --json                 # the CycleRecord instead of the summary
+```
+
+`--execute` is the only way an order is submitted, and the trading client is
+still built with `paper=True` hard-coded, so it can only reach the paper
+endpoint. Every cycle ends in one of `hold`, `no_contract`, `rejected`,
+`planned`, `submitted` or `error`, and every one is journaled.
+
+Approved MVP methodology (2026-08-27): always 1 contract; buy **limit at the
+fresh ask**, day, single leg; refuse if the premium exceeds $1,000 or the
+options buying power; right before ordering re-read the account (no SPY option
+position **and** no open SPY option order), the Alpaca clock (open, >= 30 min
+to close) and a fresh quote of the chosen contract judged by the selector's
+rules. `--action` replaces only the LLM call: a failed gate is a HOLD
+regardless. No exit logic yet: after a fill the `already_in_position` gate
+holds every later cycle until the position is closed by hand in the dashboard.
 
 ## Layout
 
@@ -200,7 +231,10 @@ whole cycle stops with an error rather than assuming an empty account.
 │   ├── console.py        # tolerant console output (non-UTF-8 terminals)
 │   ├── chain.py          # Phase 4A read-only option chain observation
 │   ├── selector.py       # Phase 4B deterministic contract selection
-│   └── account.py        # Phase 5A read-only paper account state
+│   ├── account.py        # Phase 5A read-only paper account state
+│   ├── risk.py           # MVP deterministic risk decision -> OrderPlan (pure)
+│   ├── execution.py      # MVP fresh re-check + the only paper order submission
+│   └── runner.py         # MVP one-cycle runner, JSONL journal, 15-minute loop
 └── tests/
     ├── test_config.py
     ├── test_smoke_test.py
@@ -214,7 +248,11 @@ whole cycle stops with an error rather than assuming an empty account.
     ├── test_console.py
     ├── test_chain.py
     ├── test_selector.py
-    └── test_account.py
+    ├── test_account.py
+    ├── test_risk.py
+    ├── test_execution.py
+    ├── test_runner.py
+    └── test_mvp_end_to_end.py
 ```
 
 ## Planned baseline (do not change without approval)
