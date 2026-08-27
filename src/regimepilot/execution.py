@@ -42,6 +42,7 @@ from regimepilot.models import (
     ContractCandidate,
     ExecutionState,
     FreshQuote,
+    OpenPositionContext,
     OrderPlan,
     OrderReceipt,
     SelectedContract,
@@ -107,10 +108,14 @@ def observe_execution_state(
     trading_client: Any,
     option_client: Any,
     *,
-    selected: SelectedContract,
+    selected: SelectedContract | OpenPositionContext,
     now: datetime | None = None,
 ) -> ExecutionState:
-    """Re-read account, clock and the selected contract's quote right before ordering.
+    """Re-read account, clock and the contract's quote right before ordering.
+
+    ``selected`` is the ONE contract about to be ordered: the selection for
+    an entry, or the held position for an exit (both carry the same identity
+    fields).
 
     Order of reads: account (``account.observe_account``), then the fresh
     snapshot of ``selected.symbol`` (``chain.fetch_candidate_quotes`` on the
@@ -180,16 +185,28 @@ def observe_execution_state(
     )
 
 
+_ALLOWED_SHAPES = {("buy", "buy_to_open"), ("sell", "sell_to_close")}
+
+
 def _limit_order_request(plan: OrderPlan) -> LimitOrderRequest:
-    """The one request shape this project sends. No order class, no legs, no notional."""
+    """The one request shape this project sends: buy to open or sell to close.
+
+    No order class, no legs, no notional, no extended hours. A sell to close
+    is the only way a position is ever reduced, and it is an ordinary limit
+    order; nothing here calls ``close_position``.
+    """
+    side = OrderSide.BUY if plan.side == "buy" else OrderSide.SELL
+    intent = (
+        PositionIntent.BUY_TO_OPEN if plan.position_intent == "buy_to_open" else PositionIntent.SELL_TO_CLOSE
+    )
     return LimitOrderRequest(
         symbol=plan.symbol,
         qty=plan.qty,
-        side=OrderSide.BUY,
+        side=side,
         time_in_force=TimeInForce.DAY,
         limit_price=plan.limit_price,
         client_order_id=plan.client_order_id,
-        position_intent=PositionIntent.BUY_TO_OPEN,
+        position_intent=intent,
     )
 
 
@@ -219,13 +236,15 @@ def submit_paper_order(trading_client: Any, plan: OrderPlan) -> OrderReceipt:
     # The model already fixes these; checked again because this is the one
     # line in the project that can spend money.
     if (
-        plan.side != "buy"
+        (plan.side, plan.position_intent) not in _ALLOWED_SHAPES
         or plan.order_type != "limit"
         or plan.time_in_force != "day"
         or plan.qty < 1
+        or plan.limit_price <= 0
     ):
         raise ExecutionError(
-            "refusing to submit: the plan is not a buy, limit, day order for at least one contract"
+            "refusing to submit: the plan is not a buy-to-open or sell-to-close day limit order "
+            "for at least one contract at a positive price"
         )
 
     try:

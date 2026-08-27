@@ -151,7 +151,10 @@ def decide(selection_result=None, execution_state=None, *, cycle_id=CYCLE_ID):
 
 
 def test_client_order_id_is_the_cycle_id_with_a_fixed_prefix():
-    assert client_order_id_for(CYCLE_ID) == f"regimepilot-{CYCLE_ID}"
+    assert client_order_id_for(CYCLE_ID) == f"regimepilot-{CYCLE_ID}-open"
+    assert client_order_id_for(CYCLE_ID, "close1") == f"regimepilot-{CYCLE_ID}-close1"
+    with pytest.raises(ValueError):
+        client_order_id_for(CYCLE_ID, " ")
 
 
 @pytest.mark.parametrize("cycle_id", ["", "   "])
@@ -175,8 +178,8 @@ def test_normal_path_approves_one_contract_at_the_fresh_ask():
     assert plan.symbol == SYMBOL
     assert plan.qty == MAX_CONTRACTS == 1
     assert plan.limit_price == 5.49
-    assert plan.max_premium_usd == 549.0
-    assert plan.client_order_id == f"regimepilot-{CYCLE_ID}"
+    assert plan.notional_usd == 549.0
+    assert plan.client_order_id == f"regimepilot-{CYCLE_ID}-open"
     # Fixed by methodology, never passed in: buy to open, limit, day.
     assert plan.side == "buy"
     assert plan.order_type == "limit"
@@ -194,13 +197,13 @@ def test_the_limit_price_is_the_fresh_ask_not_the_selection_ask():
     fresh = state(quote=fresh_quote(bid=5.40, ask=5.49))
     plan = decide(selection(selected=chosen), fresh).plan
     assert plan.limit_price == 5.49
-    assert plan.max_premium_usd == 549.0
+    assert plan.notional_usd == 549.0
 
 
 def test_the_ask_is_rounded_to_the_cent():
     plan = decide(execution_state=state(quote=fresh_quote(ask=5.4949))).plan
     assert plan.limit_price == 5.49
-    assert plan.max_premium_usd == 549.0
+    assert plan.notional_usd == 549.0
 
 
 def test_quantity_is_always_one_whatever_the_buying_power():
@@ -215,8 +218,8 @@ def test_quantity_is_always_one_whatever_the_buying_power():
 
 REFUSALS = [
     ("no_contract", lambda: (selection(selected=None), state())),
-    ("existing_spy_option_position", lambda: (selection(), state(account_state=account(position=True)))),
-    ("existing_spy_option_order", lambda: (selection(), state(account_state=account(order=True)))),
+    ("pending_order_conflict", lambda: (selection(), state(account_state=account(order=True)))),
+    ("duplicate_symbol", lambda: (selection(), state(account_state=account(position=True)))),
     ("market_closed", lambda: (selection(), state(market_is_open=False))),
     ("market_closed", lambda: (selection(), state(market_is_open=None))),
     ("too_close_to_close", lambda: (selection(), state(minutes_to_close=MIN_MINUTES_TO_CLOSE - 0.1))),
@@ -249,7 +252,7 @@ def test_each_rule_refuses_with_its_reason_and_no_plan(reason, build):
 def test_a_premium_exactly_at_the_cap_is_allowed():
     decision = decide(execution_state=state(quote=fresh_quote(bid=9.90, ask=10.00)))
     assert decision.approved is True
-    assert decision.plan.max_premium_usd == MAX_PREMIUM_USD == 1000.0
+    assert decision.plan.notional_usd == MAX_PREMIUM_USD == 1000.0
 
 
 def test_a_premium_exactly_equal_to_buying_power_is_allowed():
@@ -274,7 +277,7 @@ def test_the_first_failing_rule_is_reported():
         minutes_to_close=None,
         quote=fresh_quote(reject_reason="stale_quote", symbol=OTHER_SYMBOL),
     )
-    assert decide(execution_state=failing_several).reason == "existing_spy_option_position"
+    assert decide(execution_state=failing_several).reason == "duplicate_symbol"
     assert decide(selection(selected=None), failing_several).reason == "no_contract"
 
 

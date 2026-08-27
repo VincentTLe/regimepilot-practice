@@ -19,7 +19,7 @@ from alpaca.trading.requests import LimitOrderRequest
 
 from regimepilot import execution as execution_module
 from regimepilot.execution import ExecutionError, observe_execution_state, submit_paper_order
-from regimepilot.models import ExecutionState, OrderPlan, OrderReceipt, SelectedContract
+from regimepilot.models import ExecutionState, OpenPositionContext, OrderPlan, OrderReceipt, SelectedContract
 
 # 10:35 New York on Wednesday 2026-08-26 by the local clock. The server clock
 # is fourteen seconds ahead, as it was found to be on the observing machine.
@@ -257,7 +257,7 @@ def selected_contract(**overrides):
 
 def plan(**overrides):
     fields = dict(
-        symbol=SYMBOL, qty=1, limit_price=5.49, max_premium_usd=549.0, client_order_id=CLIENT_ORDER_ID
+        symbol=SYMBOL, qty=1, limit_price=5.49, notional_usd=549.0, client_order_id=CLIENT_ORDER_ID
     )
     fields.update(overrides)
     return OrderPlan(**fields)
@@ -521,10 +521,17 @@ def test_a_failed_read_back_keeps_the_submission_and_names_the_read_back():
 
 @pytest.mark.parametrize(
     "overrides",
-    [{"side": "sell"}, {"order_type": "market"}, {"time_in_force": "gtc"}, {"qty": 0}],
-    ids=["sell", "market", "gtc", "zero-qty"],
+    [
+        {"side": "sell"},
+        {"side": "buy", "position_intent": "sell_to_close"},
+        {"order_type": "market"},
+        {"time_in_force": "gtc"},
+        {"qty": 0},
+        {"limit_price": 0.0},
+    ],
+    ids=["sell-to-open", "buy-to-close", "market", "gtc", "zero-qty", "zero-price"],
 )
-def test_a_plan_that_is_not_a_buy_day_limit_is_refused_before_any_call(overrides):
+def test_a_plan_that_is_not_an_allowed_day_limit_shape_is_refused_before_any_call(overrides):
     """The model forbids these; ``model_construct`` bypasses it, as a bug might."""
     fields = {**plan().model_dump(), **overrides}
     bad_plan = OrderPlan.model_construct(**fields)
@@ -534,6 +541,52 @@ def test_a_plan_that_is_not_a_buy_day_limit_is_refused_before_any_call(overrides
         submit_paper_order(trading, bad_plan)
 
     assert trading.log == []
+
+
+# --------------------------------------------------------------------------
+# 7b. the exit: one sell-to-close limit order, and the fresh state of a held position
+# --------------------------------------------------------------------------
+
+
+def sell_plan(**overrides):
+    fields = dict(
+        symbol=SYMBOL, side="sell", position_intent="sell_to_close", qty=2, limit_price=5.44,
+        notional_usd=1088.0, client_order_id="regimepilot-x-close1",
+    )
+    fields.update(overrides)
+    return OrderPlan(**fields)
+
+
+def test_submit_sends_one_limit_day_sell_to_close_order_for_an_exit():
+    trading = FakeTradingClient()
+
+    receipt = submit_paper_order(trading, sell_plan())
+
+    (request,) = trading.submitted_requests
+    assert request.symbol == SYMBOL
+    assert float(request.qty) == 2
+    assert request.side == OrderSide.SELL
+    assert request.type == OrderType.LIMIT
+    assert request.time_in_force == TimeInForce.DAY
+    assert request.limit_price == 5.44
+    assert request.client_order_id == "regimepilot-x-close1"
+    assert request.position_intent == PositionIntent.SELL_TO_CLOSE
+    assert request.order_class is None and request.notional is None and request.extended_hours is None
+    assert receipt.submitted is True
+
+
+def test_the_fresh_state_can_be_read_for_a_held_position():
+    held = OpenPositionContext(
+        symbol=SYMBOL, option_type="call", strike_price=765.0, expiration_date=date(2026, 9, 2),
+        days_to_expiration=7, qty=1.0,
+    )
+    trading = FakeTradingClient(positions=[FakePosition()])
+
+    state = observe_with(trading=trading, selected=held)
+
+    assert state.quote.symbol == SYMBOL
+    assert state.quote.reject_reason is None
+    assert state.account.has_open_spy_option_position is True
 
 
 # --------------------------------------------------------------------------

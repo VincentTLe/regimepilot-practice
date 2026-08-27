@@ -21,7 +21,17 @@ import httpx
 from regimepilot.config import ConfigError, Settings, load_settings, require_openrouter_api_key
 from regimepilot.console import tolerant_console
 from regimepilot.evidence import EvidenceError, format_summary as format_evidence_summary, observe_evidence
-from regimepilot.models import Confidence, EvidencePacket, TradeAction, TradeProposal
+from regimepilot.models import (
+    Confidence,
+    EntryDecision,
+    EvidencePacket,
+    OpenPositionContext,
+    PortfolioContext,
+    PortfolioDecision,
+    PositionDecision,
+    TradeAction,
+    TradeProposal,
+)
 from regimepilot.news import build_news_client
 from regimepilot.smoke_test import build_clients
 
@@ -58,6 +68,13 @@ SYSTEM_PROMPT = (
 )
 
 __all__ = [
+    "PORTFOLIO_SYSTEM_PROMPT",
+    "build_portfolio_messages",
+    "decide_portfolio",
+    "format_portfolio_summary",
+    "parse_portfolio_decision",
+    "safe_portfolio_decision",
+    "stub_portfolio_decision",
     "DecisionError",
     "build_gate_hold_proposal",
     "build_prompt_messages",
@@ -314,6 +331,271 @@ def propose_trade(
     messages = build_prompt_messages(evidence)
     raw_text, model_used = call_openrouter(messages, api_key=api_key, transport=transport)
     return parse_trade_proposal(raw_text, evidence, model=model_used)
+
+
+# ---------------------------------------------------------------------------
+# Portfolio decision (approved 2026-08-27, with the three corrections). The
+# model manages every held SPY option (HOLD or CLOSE) and may ask for at most
+# one new entry; deterministic code validates all of it before anything else
+# happens. Nothing here imports an order, plan or receipt model.
+# ---------------------------------------------------------------------------
+
+VALID_POSITION_ACTIONS = frozenset({"HOLD", "CLOSE"})
+VALID_DIRECTIONS = frozenset({"CALL", "PUT"})
+INVALID_OUTPUT_REASON = "LLM output was invalid; holding every position and opening nothing."
+NOT_ADDRESSED_REASON = "not addressed by the model"
+
+PORTFOLIO_SYSTEM_PROMPT = (
+    "You are RegimePilot, an autonomous SPY options PORTFOLIO manager trading a paper account. "
+    "You receive one EvidencePacket as JSON. Its 'portfolio' lists every SPY option currently held "
+    "(symbol, option_type, strike_price, expiration_date, days_to_expiration, qty, avg_entry_price, "
+    "cost_basis, current_price, unrealized_pl, unrealized_plpc, pending_order_side, hours_held, "
+    "entry_thesis, previous_decision), the pending orders, whether a new entry is allowed "
+    "(entry_allowed, entry_blocked_reason) and the limits you work under. 'underlying' holds the SPY "
+    "features (returns, realized volatility, gap, minutes to close), 'gates' the momentum label, 'news' "
+    "recent headlines.\n"
+    "Return ONLY valid JSON of exactly this shape:\n"
+    '{"positions":[{"symbol":"<exact held symbol>","action":"HOLD"|"CLOSE","reason":"..."}],'
+    ' "new_entry": null | {"direction":"CALL"|"PUT","candidate_id": null,"thesis":"..."},'
+    ' "confidence":"low"|"medium"|"high", "portfolio_thesis":"1-3 sentences",'
+    ' "evidence_used":["field", ...]}\n'
+    "Rules: every held position must appear exactly once with HOLD or CLOSE. CLOSE means sell the whole "
+    "position now. new_entry must be null unless portfolio.entry_allowed is true. Never choose a "
+    "quantity, a price, a strike, an expiration or an OCC symbol: deterministic code sizes and prices "
+    "every order and may refuse it.\n"
+    "Options playbook: theta decay accelerates as days_to_expiration falls; under about 5 DTE a long "
+    "option bleeds fast, so prefer closing losers and taking profits early. Moneyness and delta are your "
+    "directional exposure; an out-of-the-money long option needs a move soon. Judge unrealized_plpc "
+    "against the entry thesis: close when the thesis is invalidated (momentum flipped against the "
+    "position, news contradicts it), not merely because the position is red. Never add to a loser. A wide "
+    "bid/ask spread is a real cost paid twice. Near the close prefer reducing risk over opening new risk. "
+    "Consistency with previous_decision matters, but new evidence overrides it. If unsure, HOLD existing "
+    "positions and do not open a new one."
+)
+
+
+def _held_positions(evidence: EvidencePacket) -> tuple[OpenPositionContext, ...]:
+    return () if evidence.portfolio is None else evidence.portfolio.positions
+
+
+def build_portfolio_messages(evidence: EvidencePacket) -> list[dict[str, str]]:
+    """Deterministic chat messages for the portfolio decision."""
+    payload = json.loads(evidence.model_dump_json())
+    return [
+        {"role": "system", "content": PORTFOLIO_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                "Decide for this EvidencePacket and respond with JSON only:\n"
+                f"{json.dumps(payload, separators=(',', ':'))}"
+            ),
+        },
+    ]
+
+
+def safe_portfolio_decision(
+    evidence: EvidencePacket,
+    *,
+    reason: str,
+    gate_skipped: bool,
+    model: str | None,
+) -> PortfolioDecision:
+    """The decision that changes nothing: HOLD every held symbol, open nothing."""
+    positions = tuple(
+        PositionDecision(symbol=p.symbol, action="HOLD", reason=reason) for p in _held_positions(evidence)
+    )
+    return PortfolioDecision(
+        observed_at=evidence.observed_at,
+        symbol=evidence.symbol,
+        positions=positions,
+        new_entry=None,
+        confidence="low",
+        portfolio_thesis=reason,
+        evidence_used=("gates.hold_reason",) if gate_skipped else ("parse_error",),
+        gate_skipped=gate_skipped,
+        model=model,
+    )
+
+
+def stub_portfolio_decision(evidence: EvidencePacket) -> PortfolioDecision:
+    """Rule-based stand-in for the model: momentum only, for offline runs and tests."""
+    align = evidence.gates.momentum_align
+    portfolio = evidence.portfolio
+    positions = []
+    for position in _held_positions(evidence):
+        kind = position.option_type.lower()
+        flipped = (kind == "call" and align == "aligned_down") or (kind == "put" and align == "aligned_up")
+        positions.append(
+            PositionDecision(
+                symbol=position.symbol,
+                action="CLOSE" if flipped else "HOLD",
+                reason=(
+                    "Stub rule: momentum flipped against the position."
+                    if flipped
+                    else "Stub rule: thesis intact."
+                ),
+            )
+        )
+
+    new_entry = None
+    if portfolio is not None and portfolio.entry_allowed:
+        if align == "aligned_up":
+            new_entry = EntryDecision(direction="CALL", thesis="Stub rule: 15m and 60m momentum align upward.")
+        elif align == "aligned_down":
+            new_entry = EntryDecision(direction="PUT", thesis="Stub rule: 15m and 60m momentum align downward.")
+
+    return PortfolioDecision(
+        observed_at=evidence.observed_at,
+        symbol=evidence.symbol,
+        positions=tuple(positions),
+        new_entry=new_entry,
+        confidence="medium",
+        portfolio_thesis=f"Stub rule: momentum is {align}; positions follow it, entries follow it.",
+        evidence_used=("gates.momentum_align", "portfolio.positions", "portfolio.entry_allowed"),
+        gate_skipped=False,
+        model="stub",
+    )
+
+
+def _text(value: Any, default: str) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return default
+
+
+def _position_decisions(raw: Any, held: tuple[OpenPositionContext, ...]) -> tuple[PositionDecision, ...]:
+    """One verdict per held symbol: the model's first valid one, else HOLD."""
+    entries = raw if isinstance(raw, list) else []
+    held_symbols = {p.symbol for p in held}
+    chosen: dict[str, PositionDecision] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        symbol = entry.get("symbol")
+        if not isinstance(symbol, str) or symbol.strip() not in held_symbols:
+            continue
+        symbol = symbol.strip()
+        if symbol in chosen:
+            continue
+        action = str(entry.get("action", "")).strip().upper()
+        if action not in VALID_POSITION_ACTIONS:
+            continue
+        chosen[symbol] = PositionDecision(
+            symbol=symbol,
+            action=action,  # type: ignore[arg-type]
+            reason=_text(entry.get("reason"), "no reason given"),
+        )
+    return tuple(
+        chosen.get(p.symbol) or PositionDecision(symbol=p.symbol, action="HOLD", reason=NOT_ADDRESSED_REASON)
+        for p in held
+    )
+
+
+def _entry_decision(raw: Any, portfolio: PortfolioContext | None) -> EntryDecision | None:
+    """The model's entry request, kept only when the pre-check allowed one."""
+    if portfolio is None or not portfolio.entry_allowed or not isinstance(raw, dict):
+        return None
+    direction = str(raw.get("direction", "")).strip().upper()
+    if direction not in VALID_DIRECTIONS:
+        return None
+    shortlist = portfolio.call_candidates if direction == "CALL" else portfolio.put_candidates
+    candidate_id = raw.get("candidate_id")
+    if not (isinstance(candidate_id, str) and candidate_id in {c.candidate_id for c in shortlist}):
+        candidate_id = None
+    return EntryDecision(
+        direction=direction,  # type: ignore[arg-type]
+        candidate_id=candidate_id,
+        thesis=_text(raw.get("thesis"), "no thesis given"),
+    )
+
+
+def parse_portfolio_decision(
+    raw_text: str,
+    evidence: EvidencePacket,
+    *,
+    model: str | None = None,
+) -> PortfolioDecision:
+    """Validate the model's JSON. Anything malformed becomes HOLD-all / no entry.
+
+    Only ``positions``, ``new_entry``, ``confidence``, ``portfolio_thesis`` and
+    ``evidence_used`` are read. Quantities, prices, symbols or anything else
+    the model may have added are never looked at.
+    """
+    try:
+        payload = _extract_json_object(raw_text)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return safe_portfolio_decision(evidence, reason=INVALID_OUTPUT_REASON, gate_skipped=False, model=model)
+
+    confidence = str(payload.get("confidence", "")).strip().lower()
+    if confidence not in VALID_CONFIDENCE:
+        confidence = "low"
+    raw_used = payload.get("evidence_used", [])
+    evidence_used = (
+        tuple(str(item).strip() for item in raw_used if str(item).strip()) if isinstance(raw_used, list) else ()
+    )
+    return PortfolioDecision(
+        observed_at=evidence.observed_at,
+        symbol=evidence.symbol,
+        positions=_position_decisions(payload.get("positions"), _held_positions(evidence)),
+        new_entry=_entry_decision(payload.get("new_entry"), evidence.portfolio),
+        confidence=confidence,  # type: ignore[arg-type]
+        portfolio_thesis=_text(payload.get("portfolio_thesis"), "no thesis given"),
+        evidence_used=evidence_used,
+        gate_skipped=False,
+        model=model,
+    )
+
+
+def decide_portfolio(
+    evidence: EvidencePacket,
+    *,
+    stub: bool = False,
+    settings: Settings | None = None,
+    transport: Callable[..., Any] | None = None,
+) -> PortfolioDecision:
+    """Turn one EvidencePacket into one PortfolioDecision.
+
+    No model is called when the market is closed (nothing could be executed)
+    or when nothing is held and no entry is allowed. Any other failed entry
+    gate still lets the model manage the held positions; the parser then
+    forces ``new_entry`` to ``None`` because the pre-check said so.
+    """
+    portfolio = evidence.portfolio
+    held = _held_positions(evidence)
+    entry_allowed = portfolio.entry_allowed if portfolio is not None else False
+
+    if evidence.underlying.market_is_open is not True or evidence.gates.hold_reason == "market_closed":
+        return safe_portfolio_decision(evidence, reason="market_closed", gate_skipped=True, model="pre_gate")
+    if not held and not entry_allowed:
+        blocked = portfolio.entry_blocked_reason if portfolio is not None else None
+        return safe_portfolio_decision(
+            evidence, reason=f"nothing to decide: {blocked or 'no portfolio'}", gate_skipped=True, model="pre_gate"
+        )
+
+    if stub:
+        return stub_portfolio_decision(evidence)
+
+    active_settings = settings or load_settings()
+    api_key = require_openrouter_api_key(active_settings)
+    raw_text, model_used = call_openrouter(build_portfolio_messages(evidence), api_key=api_key, transport=transport)
+    return parse_portfolio_decision(raw_text, evidence, model=model_used)
+
+
+def format_portfolio_summary(decision: PortfolioDecision) -> str:
+    """A few lines: one per position verdict, the entry, confidence and thesis."""
+    header = f"RegimePilot portfolio  {decision.symbol}  @ {decision.observed_at.strftime('%Y-%m-%d %H:%M:%SZ')}"
+    if decision.gate_skipped:
+        header += "  (pre-gate)"
+    lines = [header]
+    if decision.positions:
+        lines.extend(f"  {v.symbol:<22} {v.action:<6} {v.reason}" for v in decision.positions)
+    else:
+        lines.append("  positions       (none held)")
+    entry = decision.new_entry
+    lines.append("  new entry       " + ("none" if entry is None else f"{entry.direction}: {entry.thesis}"))
+    lines.append(f"  confidence      {decision.confidence}   model {decision.model or 'unknown'}")
+    lines.append(f"  thesis          {decision.portfolio_thesis}")
+    return "\n".join(lines)
 
 
 def format_summary(proposal: TradeProposal) -> str:
