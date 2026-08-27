@@ -8,6 +8,8 @@ import pytest
 
 from regimepilot import decision as decision_module
 from regimepilot.decision import (
+    FALLBACK_MODELS,
+    PRIMARY_MODEL,
     DecisionError,
     build_gate_hold_proposal,
     build_prompt_messages,
@@ -105,7 +107,7 @@ def test_parse_trade_proposal_accepts_valid_json():
             "evidence_used": ["underlying.return_15m", "gates.momentum_align"],
         }
     )
-    proposal = parse_trade_proposal(raw, evidence, model="stealth/ox-alpha")
+    proposal = parse_trade_proposal(raw, evidence, model="test-model")
 
     assert proposal.action == "BUY_PUT"
     assert proposal.confidence == "high"
@@ -114,14 +116,14 @@ def test_parse_trade_proposal_accepts_valid_json():
 
 def test_parse_trade_proposal_defaults_to_hold_on_invalid_json():
     evidence = build_evidence()
-    proposal = parse_trade_proposal("not json at all", evidence, model="stealth/ox-alpha")
+    proposal = parse_trade_proposal("not json at all", evidence, model="test-model")
 
     assert proposal.action == "HOLD"
     assert proposal.confidence == "low"
     assert "invalid" in proposal.thesis.lower()
 
 
-def test_call_openrouter_uses_primary_and_fallback_models():
+def test_call_openrouter_routes_through_the_named_model_chain_in_order():
     captured = {}
 
     def fake_post(url, *, headers, json, timeout):
@@ -131,7 +133,7 @@ def test_call_openrouter_uses_primary_and_fallback_models():
         captured["timeout"] = timeout
         return FakeResponse(
             {
-                "model": "stealth/ox-alpha",
+                "model": PRIMARY_MODEL,
                 "choices": [{"message": {"content": '{"action":"HOLD","confidence":"low","thesis":"Wait.","evidence_used":[]}'}}],
             }
         )
@@ -142,11 +144,37 @@ def test_call_openrouter_uses_primary_and_fallback_models():
         transport=fake_post,
     )
 
-    assert "stealth/ox-alpha" in captured["json"]["models"]
-    assert "openrouter/free" in captured["json"]["models"]
+    # OpenRouter tries the list in priority order and falls through on 429/5xx,
+    # so the order here is the order that matters.
+    assert captured["json"]["model"] == PRIMARY_MODEL
+    assert captured["json"]["models"] == [PRIMARY_MODEL, *FALLBACK_MODELS]
     assert captured["headers"]["Authorization"] == f"Bearer {OPENROUTER_KEY}"
     assert "HOLD" in text
-    assert model == "stealth/ox-alpha"
+    assert model == PRIMARY_MODEL
+
+
+def test_the_model_chain_is_the_approved_chain_with_no_random_router():
+    """Chosen 2026-08-26 from live probes: paid GLM-5.3 Flash first (the model
+    Ox Alpha turned out to be), then named free fallbacks in quality order.
+
+    ``openrouter/free`` picks an arbitrary model per request and ``stealth/*``
+    models are retired without notice; neither may reappear in the chain.
+    """
+    assert PRIMARY_MODEL == "z-ai/glm-5.3-flash"
+    assert FALLBACK_MODELS == (
+        "minimax/minimax-m3:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+    )
+    for name in FALLBACK_MODELS:
+        assert name.endswith(":free")
+    for name in (PRIMARY_MODEL, *FALLBACK_MODELS):
+        assert "openrouter/" not in name
+        assert "stealth/" not in name
+
+
+def test_the_routing_list_never_exceeds_openrouter_s_three_model_limit():
+    """A fourth entry is an HTTP 400 ("'models' array must have 3 items or fewer")."""
+    assert len((PRIMARY_MODEL, *FALLBACK_MODELS)) <= 3
 
 
 def test_call_openrouter_raises_a_credential_safe_error_on_http_failure():

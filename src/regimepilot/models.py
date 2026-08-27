@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict, model_validator
 
 UNDERLYING_SYMBOL = "SPY"
 
@@ -214,3 +214,127 @@ class TradeProposal(Observation):
     evidence_used: tuple[str, ...] = ()
     gate_skipped: bool = False
     model: str | None = None
+
+
+class ContractCandidate(Observation):
+    """One option contract near the money, with the quote it had when observed.
+
+    Identity comes from the Trading API contract list, the quote from the
+    option snapshot feed. Any field but ``symbol`` may be null if the feed had
+    nothing to say. Deliberately carries no greek, no implied volatility, no
+    open interest and no verdict: Phase 4A observes what is on offer, it does
+    not judge it.
+    """
+
+    symbol: str
+    option_type: str | None = None
+    strike_price: float | None = None
+    expiration_date: date | None = None
+    days_to_expiration: int | None = None
+    status: str | None = None
+    tradable: bool | None = None
+    bid: float | None = None
+    ask: float | None = None
+    quote_at: UtcDatetime | None = None
+
+
+class ChainPacket(Observation):
+    """The narrow slice of the option chain one proposal direction looks at.
+
+    ``underlying_mid`` is the SPY midpoint the strike window was built around.
+    ``None`` means there was no usable SPY quote, and then there are no
+    candidates because there was no window to query. ``candidates`` is a
+    tuple for the same reason ``OptionUniverse.contracts`` is.
+
+    ``observed_at`` is the observing machine's clock; ``quotes_read_at`` is
+    Alpaca's own clock, read right after the quotes arrived. Quote ages are
+    measured against the latter, because the machine's clock was found to be
+    fourteen seconds slow and a freshness threshold must not inherit that.
+    """
+
+    observed_at: UtcDatetime
+    symbol: str = UNDERLYING_SYMBOL
+    action: TradeAction
+    option_feed: str
+    underlying_mid: float | None = None
+    quotes_read_at: UtcDatetime | None = None
+    candidates: tuple[ContractCandidate, ...] = ()
+
+
+RejectReason = Literal[
+    "invalid_contract",
+    "not_tradable",
+    "no_quote",
+    "invalid_quote",
+    "stale_quote",
+    "wide_spread",
+]
+SelectionStatus = Literal["selected", "no_contract", "not_applicable"]
+NoContractReason = Literal["no_underlying_price", "no_candidates", "all_candidates_rejected"]
+
+
+class CandidateVerdict(Observation):
+    """Why one candidate at the target expiration was, or was not, eligible."""
+
+    symbol: str
+    expiration_date: date | None = None
+    days_to_expiration: int | None = None
+    strike_price: float | None = None
+    reject_reason: RejectReason | None = None
+
+
+class SelectedContract(Observation):
+    """The one contract Phase 4 chose, with the quote it was chosen on.
+
+    Carries no quantity, no limit price and no order type: those are Phase 5
+    decisions. The quote fields are evidence of what was true at selection,
+    not an instruction.
+    """
+
+    symbol: str
+    option_type: str
+    strike_price: float
+    expiration_date: date
+    days_to_expiration: int
+    bid: float
+    ask: float
+    mid: float
+    spread_bps: float
+    quote_at: UtcDatetime
+    quote_age_seconds: float
+    underlying_mid: float
+
+
+class SelectionResult(Observation):
+    """One answer to "which contract?", with the verdict on every candidate.
+
+    ``status`` is the headline and the other fields must agree with it:
+    ``selected`` carries a contract and no reason, ``no_contract`` carries a
+    reason and no contract, ``not_applicable`` (a HOLD) carries neither.
+    """
+
+    observed_at: UtcDatetime
+    symbol: str = UNDERLYING_SYMBOL
+    action: TradeAction
+    status: SelectionStatus
+    reason: NoContractReason | None = None
+    target_expiration: date | None = None
+    selected: SelectedContract | None = None
+    verdicts: tuple[CandidateVerdict, ...] = ()
+
+    @model_validator(mode="after")
+    def _status_agrees_with_its_fields(self) -> SelectionResult:
+        has_contract = self.selected is not None
+        has_reason = self.reason is not None
+        expected = {
+            "selected": (True, False),
+            "no_contract": (False, True),
+            "not_applicable": (False, False),
+        }[self.status]
+        if (has_contract, has_reason) != expected:
+            raise ValueError(
+                f"status {self.status!r} does not agree with "
+                f"selected={'set' if has_contract else 'none'}, "
+                f"reason={'set' if has_reason else 'none'}"
+            )
+        return self

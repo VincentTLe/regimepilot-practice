@@ -224,6 +224,18 @@ def spread_bps(bid: float | None, ask: float | None) -> float | None:
     return (ask - bid) / mid * BASIS_POINTS
 
 
+def quote_age_seconds(quote_at: datetime | None, reference: datetime) -> float | None:
+    """How old a quote stamped ``quote_at`` was at ``reference``, in seconds.
+
+    ``None`` when there is no quote. A stamp after the reference reads as 0.0
+    rather than a negative age; whether such a stamp is acceptable is the
+    caller's rule to state, not this function's to hide.
+    """
+    if quote_at is None:
+        return None
+    return max(0.0, (to_utc(reference) - to_utc(quote_at)).total_seconds())
+
+
 def realized_volatility(bars: Sequence[OhlcvBar]) -> float | None:
     """Root sum of squared one-minute log returns over the most recent window.
 
