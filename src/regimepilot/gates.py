@@ -28,12 +28,14 @@ MAX_BAR_AGE_SECONDS = 120
 # thresholds were never approved; do not reintroduce them without approval.
 MomentumAlign = Literal["aligned_up", "aligned_down", "mixed", "unknown"]
 
+# Entry gates only. A held position is never a reason to stop reasoning: the
+# portfolio agent manages positions whatever these say, and only a NEW entry
+# is blocked when one fails (approved 2026-08-27).
 HoldReason = Literal[
     "market_closed",
     "too_close_to_close",
     "stale_data",
     "missing_momentum",
-    "already_in_position",
 ]
 
 
@@ -81,16 +83,14 @@ def derive_labels(packet: FeaturePacket) -> SessionLabels:
     )
 
 
-def evaluate_gates(
-    packet: FeaturePacket,
-    *,
-    has_open_option_position: bool = False,
-) -> GateResult:
-    """Return pass/fail plus labels. First failing rule wins."""
-    labels = derive_labels(packet)
+def evaluate_gates(packet: FeaturePacket) -> GateResult:
+    """Return pass/fail plus labels for a NEW entry. First failing rule wins.
 
-    if has_open_option_position:
-        return GateResult(passed=False, hold_reason="already_in_position", labels=labels)
+    These gates say nothing about held positions: closing one is judged by
+    the exit rules in ``risk``, which need only an open market and a fresh
+    quote.
+    """
+    labels = derive_labels(packet)
 
     if packet.market_is_open is not True:
         return GateResult(passed=False, hold_reason="market_closed", labels=labels)

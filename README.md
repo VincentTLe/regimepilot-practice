@@ -6,13 +6,15 @@ Practice project for the **Alpaca AI Trading Agents Hackathon** (Aug 28 - Sep 4,
 > treat this folder as practice, not the official submission. The judged submission
 > must use a **fresh Alpaca paper account funded with exactly $100,000**.
 
-## Status: Phase 5A (paper account state) implemented
+## Status: autonomous SPY options portfolio agent (paper)
 
 Phase 3 adds read-only AI direction proposals (`BUY_CALL` / `BUY_PUT` / `HOLD`).
 Phase 4 turns a proposal into one exact SPY option contract with deterministic
 code. Phase 5A reads the real paper account (positions, open orders, equity,
-options buying power) so the `already_in_position` pre-gate holds on a real SPY
-option position instead of a placeholder. No orders are submitted yet.
+options buying power). The portfolio `runner` turns that into an autonomous
+agent: every held SPY option is managed independently (HOLD or CLOSE), at most
+one new position is opened per cycle, exits are exact SELL_TO_CLOSE orders,
+and every order passes deterministic risk (see "Run the portfolio agent").
 
 | # | Phase | State |
 |---|---------------------------------------|-------------|
@@ -20,10 +22,8 @@ option position instead of a placeholder. No orders are submitted yet.
 | 2 | Read-only market observer + features | done |
 | 3 | AI trade proposal, no execution | done |
 | 4 | Deterministic contract selector (4A chain observation, 4B selection) | done |
-| 5A | Read-only paper account state (positions, open orders, balances) | **current** |
-| 5B | Risk gate + dry-run order generation | not started |
-| 6 | Small paper options trade | not started |
-| 7 | Autonomous 15-minute loop | not started |
+| 5A | Read-only paper account state (positions, open orders, balances) | done |
+| 5B-7 | Autonomous portfolio agent: HOLD/CLOSE per position, one entry per cycle, exact SELL_TO_CLOSE, paper execution, 15-minute loop | **current** |
 | 8 | Dashboard and hackathon submission | not started |
 
 ## Safety rules this code enforces
@@ -35,8 +35,8 @@ option position instead of a placeholder. No orders are submitted yet.
 - `TradingClient` is always constructed with `paper=True` hard-coded, so no
   environment value can flip it to live.
 - Credentials live in `SecretStr` and are never printed or logged.
-- There is **no** function to submit, cancel or replace an order, and none to close
-  or exercise a position. Do not add one before the phase that calls for it.
+- `execution.submit_paper_order` is the **only** function that submits an order, and it
+  runs only under `runner --execute`. Nothing cancels, replaces, closes or exercises.
 - Unit tests make **no** network calls.
 
 ## Setup
@@ -173,11 +173,45 @@ uv run python -m regimepilot.account --json
 ```
 
 A SPY option is an `us_option` position or order whose OCC root symbol is exactly
-`SPY` (the same filter Phase 4A queries contracts with). The `already_in_position`
-pre-gate now holds whenever such a position exists, so `evidence`, `decision` and
-`selector` all see the real account. Open SPY option orders are recorded but do
-not change the gate yet (a Phase 5B decision). If any account read fails, the
-whole cycle stops with an error rather than assuming an empty account.
+`SPY` (the same filter Phase 4A queries contracts with). Held SPY options become
+the portfolio the agent manages; a pending order on a symbol blocks only actions
+on that symbol (and new entries while a buy is pending). If any account read
+fails, the whole cycle stops with an error rather than assuming an empty
+account.
+
+## Run the portfolio agent (one cycle, or the autonomous loop)
+
+One command runs evidence -> entry gates -> portfolio context (every held SPY
+option with its marks and journal memo, every pending order by symbol) -> LLM
+`PortfolioDecision` (HOLD/CLOSE per position, at most one new entry) ->
+deterministic risk per action -> orders, and appends one JSON line per cycle to
+`logs/cycles.jsonl` (git-ignored). The default is a **dry run**: nothing is
+submitted.
+
+```bash
+uv run python -m regimepilot.runner --stub                  # rule-based decision, dry run
+uv run python -m regimepilot.runner                         # LLM decision, dry run
+uv run python -m regimepilot.runner --enter CALL --execute  # force one entry (after the entry pre-check), real PAPER order
+uv run python -m regimepilot.runner --close SPY260902P00765000 --execute   # close exactly this position
+uv run python -m regimepilot.runner --loop --execute        # autonomous: the LLM manages, every 15 min, no per-trade approval
+uv run python -m regimepilot.runner --json                  # the CycleRecord instead of the summary
+```
+
+`--execute` is the only way an order is submitted, and the trading client is
+still built with `paper=True` hard-coded, so it can only reach the paper
+endpoint. `--enter` / `--close` are validation helpers: they replace the model's
+choice but never bypass the entry pre-check or the exit safety rules.
+
+Approved methodology (2026-08-27): at most **3** open SPY option positions (a
+pending buy counts), **1** new entry per cycle, **$1,000** premium per entry,
+**$3,000** total premium; entries are buy-to-open, 1 contract, **limit at the
+fresh ask**, day; an exit closes the **whole** fresh closable quantity of one
+exact symbol, **limit at the fresh bid**, day, sell-to-close. Entry gates
+(market open, >= 30 min to close, fresh bars, momentum) block only new entries;
+a position can always be closed while the market is open, its quote is fresh,
+and no order is pending on that symbol. Malformed model output means HOLD every
+position and open nothing. Every cycle is journaled with the full evidence,
+the decision, each action's risk verdict, plan and receipt.
 
 ## Layout
 
@@ -200,7 +234,11 @@ whole cycle stops with an error rather than assuming an empty account.
 │   ├── console.py        # tolerant console output (non-UTF-8 terminals)
 │   ├── chain.py          # Phase 4A read-only option chain observation
 │   ├── selector.py       # Phase 4B deterministic contract selection
-│   └── account.py        # Phase 5A read-only paper account state
+│   ├── account.py        # Phase 5A read-only paper account state
+│   ├── risk.py           # deterministic entry/exit risk -> OrderPlan (pure)
+│   ├── execution.py      # fresh re-check + the only paper order submission (buy/sell)
+│   ├── memory.py         # journal-backed position memory
+│   └── runner.py         # portfolio cycle runner, JSONL journal, 15-minute loop
 └── tests/
     ├── test_config.py
     ├── test_smoke_test.py
@@ -214,7 +252,12 @@ whole cycle stops with an error rather than assuming an empty account.
     ├── test_console.py
     ├── test_chain.py
     ├── test_selector.py
-    └── test_account.py
+    ├── test_account.py
+    ├── test_risk.py
+    ├── test_execution.py
+    ├── test_runner.py
+    ├── test_memory.py
+    └── test_mvp_end_to_end.py
 ```
 
 ## Planned baseline (do not change without approval)

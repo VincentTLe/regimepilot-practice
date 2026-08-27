@@ -31,8 +31,8 @@ import json
 import re
 import sys
 from collections.abc import Callable, Sequence
-from datetime import datetime, timezone
-from typing import Any
+from datetime import date, datetime, timezone
+from typing import Any, NamedTuple
 
 from alpaca.trading.enums import QueryOrderStatus
 from alpaca.trading.requests import GetOrdersRequest
@@ -63,12 +63,14 @@ _OCC_SYMBOL = re.compile(r"([A-Z]{1,6})(\d{6})([CP])(\d{8})")
 __all__ = [
     "OPEN_ORDER_LIMIT",
     "AccountError",
+    "OccContract",
     "format_summary",
     "is_spy_option",
     "normalize_order",
     "normalize_position",
     "observe_account",
     "occ_root",
+    "parse_occ_symbol",
     "main",
 ]
 
@@ -118,17 +120,45 @@ def _field(source: Any, name: str) -> Any:
     return getattr(source, name, None)
 
 
-def occ_root(symbol: Any) -> str | None:
-    """The root of a compact OCC option symbol, or ``None`` if it is not one.
+class OccContract(NamedTuple):
+    """The four facts a compact OCC symbol encodes."""
 
-    ``"SPY260902C00765000"`` -> ``"SPY"``. The symbol is taken exactly as
-    given: nothing is upper-cased or stripped, because a symbol that needs
-    repairing is not one this module should vouch for.
+    root: str
+    expiration_date: date
+    option_type: str  # "call" | "put"
+    strike_price: float
+
+
+def parse_occ_symbol(symbol: Any) -> OccContract | None:
+    """Decode a compact OCC symbol, or ``None`` if it is not one.
+
+    ``"SPY260902C00765000"`` -> root ``SPY``, 2026-09-02, call, 765.0. The
+    symbol is taken exactly as given: nothing is upper-cased or stripped,
+    because a symbol that needs repairing is not one this module should
+    vouch for. A date that does not exist is also ``None``.
     """
     if not isinstance(symbol, str):
         return None
     match = _OCC_SYMBOL.fullmatch(symbol)
-    return None if match is None else match.group(1)
+    if match is None:
+        return None
+    root, yymmdd, letter, strike = match.groups()
+    try:
+        expiration = datetime.strptime(yymmdd, "%y%m%d").date()
+    except ValueError:
+        return None
+    return OccContract(
+        root=root,
+        expiration_date=expiration,
+        option_type="call" if letter == "C" else "put",
+        strike_price=int(strike) / 1000,
+    )
+
+
+def occ_root(symbol: Any) -> str | None:
+    """The root of a compact OCC option symbol, or ``None`` if it is not one."""
+    parsed = parse_occ_symbol(symbol)
+    return None if parsed is None else parsed.root
 
 
 def is_spy_option(symbol: Any, asset_class: Any) -> bool:
@@ -166,6 +196,13 @@ def normalize_position(position: Any) -> PositionSummary:
         side=_as_text(_field(position, "side")),
         qty=_as_float(_field(position, "qty")),
         is_spy_option=is_spy_option(symbol, asset_class),
+        avg_entry_price=_as_float(_field(position, "avg_entry_price")),
+        cost_basis=_as_float(_field(position, "cost_basis")),
+        current_price=_as_float(_field(position, "current_price")),
+        market_value=_as_float(_field(position, "market_value")),
+        unrealized_pl=_as_float(_field(position, "unrealized_pl")),
+        unrealized_plpc=_as_float(_field(position, "unrealized_plpc")),
+        qty_available=_as_float(_field(position, "qty_available")),
     )
 
 
