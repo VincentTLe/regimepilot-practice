@@ -12,6 +12,7 @@ from regimepilot.account import (
     AccountError,
     format_summary,
     is_spy_option,
+    normalize_position,
     observe_account,
     occ_root,
 )
@@ -71,9 +72,17 @@ class FakePosition:
         self.asset_class = asset_class
         self.qty = qty
         self.side = side
-        # Fields Phase 5A must NOT copy into the state.
+        # Management facts the portfolio agent reads (as text, like Alpaca).
         self.avg_entry_price = "3.40"
         self.market_value = "350.00"
+        self.cost_basis = "340.00"
+        self.current_price = "3.50"
+        self.unrealized_pl = "10.00"
+        self.unrealized_plpc = "0.0294"
+        self.qty_available = "1"
+        # Fields the state must NOT copy.
+        self.asset_id = "asset-uuid"
+        self.exchange = "OPRA"
 
 
 class FakeOrder:
@@ -171,7 +180,9 @@ def test_a_spy_option_position_sets_the_position_flag_only(symbol):
     assert state.has_open_spy_option_order is False
     assert state.positions == (
         PositionSummary(
-            symbol=symbol, asset_class="us_option", side="long", qty=1.0, is_spy_option=True
+            symbol=symbol, asset_class="us_option", side="long", qty=1.0, is_spy_option=True,
+            avg_entry_price=3.4, cost_basis=340.0, current_price=3.5, market_value=350.0,
+            unrealized_pl=10.0, unrealized_plpc=0.0294, qty_available=1.0,
         ),
     )
 
@@ -521,6 +532,40 @@ def test_the_module_exposes_no_order_or_position_mutation():
 )
 def test_occ_root_reads_only_the_compact_alpaca_form(symbol, root):
     assert occ_root(symbol) == root
+
+
+@pytest.mark.parametrize(
+    "symbol, expected",
+    [
+        (SPY_CALL, ("SPY", "2026-09-02", "call", 765.0)),
+        (SPY_PUT, ("SPY", "2026-09-02", "put", 766.0)),
+        ("SPXW260902C05000000", ("SPXW", "2026-09-02", "call", 5000.0)),
+        ("SPY260902C00765500", ("SPY", "2026-09-02", "call", 765.5)),
+        ("SPY261399C00765000", None),  # month 13 is not a date
+        ("SPY1260902C00765000", None),
+    ],
+)
+def test_parse_occ_symbol_decodes_expiration_type_and_strike(symbol, expected):
+    from regimepilot.account import parse_occ_symbol
+
+    parsed = parse_occ_symbol(symbol)
+    if expected is None:
+        assert parsed is None
+    else:
+        assert (parsed.root, str(parsed.expiration_date), parsed.option_type, parsed.strike_price) == expected
+
+
+def test_normalize_position_keeps_the_management_facts_as_floats():
+    summary = normalize_position(FakePosition())
+
+    assert summary.avg_entry_price == 3.40
+    assert summary.cost_basis == 340.0
+    assert summary.current_price == 3.50
+    assert summary.market_value == 350.0
+    assert summary.unrealized_pl == 10.0
+    assert summary.unrealized_plpc == 0.0294
+    assert summary.qty_available == 1.0
+    assert "asset_id" not in summary.model_dump() and "exchange" not in summary.model_dump()
 
 
 @pytest.mark.parametrize(

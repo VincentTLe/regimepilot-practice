@@ -30,6 +30,7 @@ symbol, limit at the fresh ask rounded to the cent, day, client order id
 from __future__ import annotations
 
 from regimepilot.gates import MIN_MINUTES_TO_CLOSE
+from regimepilot.models import PortfolioLimits
 from regimepilot.models import ExecutionState, OrderPlan, RiskDecision, RiskReason, SelectionResult
 
 # Approved 2026-08-27. Always one contract; never sized from confidence or equity.
@@ -38,6 +39,20 @@ MAX_CONTRACTS = 1
 # Approved 2026-08-27. ATM 7-DTE SPY quotes ran about $5.5 (~$550 a contract)
 # on 2026-08-26, so this admits a normal trade and refuses anything strange.
 MAX_PREMIUM_USD = 1000.0
+
+# Portfolio limits approved 2026-08-27: at most three SPY option positions
+# (a pending buy counts as one), one new entry per cycle, and at most $3,000
+# of premium at risk across every held contract plus the new one.
+MAX_OPEN_POSITIONS = 3
+MAX_NEW_ENTRIES_PER_CYCLE = 1
+MAX_TOTAL_PREMIUM_USD = 3000.0
+
+DEFAULT_LIMITS = PortfolioLimits(
+    max_open_positions=MAX_OPEN_POSITIONS,
+    max_new_entries_per_cycle=MAX_NEW_ENTRIES_PER_CYCLE,
+    max_entry_premium_usd=MAX_PREMIUM_USD,
+    max_total_premium_usd=MAX_TOTAL_PREMIUM_USD,
+)
 
 # Prices are sent in whole cents.
 PRICE_DECIMALS = 2

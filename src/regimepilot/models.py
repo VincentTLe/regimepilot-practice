@@ -183,18 +183,142 @@ class NewsEvidence(Observation):
 
 
 class AccountHint(Observation):
-    """Minimal account state needed before Phase 5 risk sizing.
+    """Kept for compatibility: true when the paper account holds any SPY option.
 
-    ``has_open_option_position`` is true when the paper account holds any SPY
-    option contract, as read by Phase 5A (``AccountState``). An option on
-    another underlying does not set it.
+    The portfolio agent reads ``EvidencePacket.portfolio`` instead; this flag
+    no longer gates anything.
     """
 
     has_open_option_position: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Portfolio context (approved 2026-08-27): what the LLM sees about every held
+# SPY option, every pending order, and whether a new entry is even eligible.
+# ---------------------------------------------------------------------------
+
+
+class PositionMemo(Observation):
+    """What the journal remembers about one held contract: why it was opened,
+    when, and what the agent last decided about it. All best effort."""
+
+    symbol: str
+    entered_at: UtcDatetime | None = None
+    entry_thesis: str | None = None
+    previous_decision: str | None = None
+
+
+class OpenPositionContext(Observation):
+    """One held SPY option as the portfolio manager sees it.
+
+    Identity comes from the OCC symbol, size and marks from Alpaca's position
+    record, memory from the journal. ``pending_order_side`` is the side of an
+    open order on this exact symbol, if any: it blocks actions on this symbol
+    only, never the rest of the portfolio.
+    """
+
+    symbol: str
+    option_type: str
+    strike_price: float
+    expiration_date: date
+    days_to_expiration: int
+    qty: float
+    avg_entry_price: float | None = None
+    cost_basis: float | None = None
+    current_price: float | None = None
+    unrealized_pl: float | None = None
+    unrealized_plpc: float | None = None
+    pending_order_side: str | None = None
+    entered_at: UtcDatetime | None = None
+    hours_held: float | None = None
+    entry_thesis: str | None = None
+    previous_decision: str | None = None
+
+
+class PendingOrder(Observation):
+    """One open SPY option order, by exact symbol."""
+
+    order_id: str
+    symbol: str
+    side: str | None = None
+    qty: float | None = None
+    status: str | None = None
+
+
+class EntryCandidate(Observation):
+    """One deterministically shortlisted contract the LLM may pick by id.
+
+    Greeks and IV are copied when the feed provides them and null otherwise;
+    a null never blocks anything. Empty shortlists mean "the deterministic
+    selector will pick", which is always a valid fallback.
+    """
+
+    candidate_id: str
+    symbol: str
+    option_type: str
+    strike_price: float
+    expiration_date: date
+    days_to_expiration: int
+    bid: float
+    ask: float
+    mid: float
+    spread_bps: float
+    moneyness: float
+    implied_volatility: float | None = None
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+
+
+class PortfolioLimits(Observation):
+    """The deterministic limits the LLM works under, stated so it can see them."""
+
+    max_open_positions: int
+    max_new_entries_per_cycle: int
+    max_entry_premium_usd: float
+    max_total_premium_usd: float
+
+
+class PortfolioContext(Observation):
+    """Every held SPY option, every pending order, and the entry pre-check.
+
+    ``entry_allowed`` is a deterministic pre-check (entry gates, position
+    count, total premium, pending buys); the risk layer re-checks everything
+    on a fresh account read before any order. ``positions`` are ordered by
+    symbol so two cycles describe the same portfolio the same way.
+    """
+
+    positions: tuple[OpenPositionContext, ...] = ()
+    open_position_count: int = 0
+    total_cost_basis: float | None = None
+    options_buying_power: float | None = None
+    equity: float | None = None
+    pending_orders: tuple[PendingOrder, ...] = ()
+    entry_allowed: bool = False
+    entry_blocked_reason: str | None = None
+    underlying_mid: float | None = None
+    call_candidates: tuple[EntryCandidate, ...] = ()
+    put_candidates: tuple[EntryCandidate, ...] = ()
+    limits: PortfolioLimits
+
+    @model_validator(mode="after")
+    def _count_and_flag_agree(self) -> PortfolioContext:
+        if self.open_position_count != len(self.positions):
+            raise ValueError("open_position_count does not agree with the positions listed")
+        if self.entry_allowed and self.entry_blocked_reason is not None:
+            raise ValueError("an allowed entry cannot carry a blocked reason")
+        if not self.entry_allowed and self.entry_blocked_reason is None:
+            raise ValueError("a blocked entry must say why")
+        return self
+
+
 class EvidencePacket(Observation):
-    """One normalized briefing for LLM direction reasoning."""
+    """One normalized briefing for LLM portfolio reasoning.
+
+    ``portfolio`` is what the agent manages; ``account`` is the Phase 3 flag
+    kept for older readers.
+    """
 
     observed_at: UtcDatetime
     symbol: str = UNDERLYING_SYMBOL
@@ -202,6 +326,7 @@ class EvidencePacket(Observation):
     underlying: UnderlyingEvidence
     news: NewsEvidence
     account: AccountHint
+    portfolio: PortfolioContext | None = None
 
 
 TradeAction = Literal["BUY_CALL", "BUY_PUT", "HOLD"]
@@ -358,6 +483,15 @@ class PositionSummary(Observation):
     side: str | None = None
     qty: float | None = None
     is_spy_option: bool = False
+    # Management facts Alpaca reports per position (money as text upstream,
+    # floats here, null when absent). Read, never computed.
+    avg_entry_price: float | None = None
+    cost_basis: float | None = None
+    current_price: float | None = None
+    market_value: float | None = None
+    unrealized_pl: float | None = None
+    unrealized_plpc: float | None = None
+    qty_available: float | None = None
 
 
 class OpenOrderSummary(Observation):
@@ -414,20 +548,72 @@ class AccountState(Observation):
 
 
 # ---------------------------------------------------------------------------
-# MVP execution models (methodology approved 2026-08-27). One vertical slice:
-# selection -> fresh re-check -> deterministic risk -> OrderPlan -> optional
-# paper submission -> one CycleRecord per cycle. The LLM touches none of these.
+# Portfolio agent execution models (methodology approved 2026-08-27, with the
+# three corrections of the same day). The LLM produces a PortfolioDecision;
+# deterministic code turns each requested action into at most one order.
 # ---------------------------------------------------------------------------
 
 
+PositionAction = Literal["HOLD", "CLOSE"]
+EntryDirection = Literal["CALL", "PUT"]
+
+
+class PositionDecision(Observation):
+    """The LLM's verdict on one held contract, by exact symbol."""
+
+    symbol: str
+    action: PositionAction
+    reason: str
+
+
+class EntryDecision(Observation):
+    """The LLM's request for at most one new position.
+
+    ``candidate_id`` names a shortlisted contract when the LLM chose one and
+    the id was valid; ``None`` means the deterministic selector picks.
+    Quantity and price never appear here.
+    """
+
+    direction: EntryDirection
+    candidate_id: str | None = None
+    thesis: str
+
+
+class PortfolioDecision(Observation):
+    """One cycle's decision over the whole portfolio.
+
+    Every held symbol gets exactly one ``PositionDecision`` (the parser fills
+    a HOLD for any the model skipped). ``new_entry`` is present only when the
+    entry pre-check allowed one. ``gate_skipped`` means no model was called
+    and this is the safe default (HOLD all, no entry).
+    """
+
+    observed_at: UtcDatetime
+    symbol: str = UNDERLYING_SYMBOL
+    positions: tuple[PositionDecision, ...] = ()
+    new_entry: EntryDecision | None = None
+    confidence: Confidence
+    portfolio_thesis: str
+    evidence_used: tuple[str, ...] = ()
+    gate_skipped: bool = False
+    model: str | None = None
+
+    @model_validator(mode="after")
+    def _one_decision_per_symbol(self) -> PortfolioDecision:
+        symbols = [p.symbol for p in self.positions]
+        if len(symbols) != len(set(symbols)):
+            raise ValueError("a position decision names the same symbol twice")
+        return self
+
+
 class FreshQuote(Observation):
-    """The chosen contract re-quoted immediately before an order.
+    """The contract re-quoted immediately before an order.
 
     ``server_time`` is Alpaca's clock read right after the quote, so the age
     is measured the way Phase 4 measured it. ``reject_reason`` is the verdict
     of the same rules ``selector.judge_candidate`` applies (identity taken
-    from the ``SelectedContract``, bid/ask/timestamp from the fresh snapshot);
-    ``None`` means the quote is acceptable to order against.
+    from the contract, bid/ask/timestamp from the fresh snapshot); ``None``
+    means the quote is acceptable to order against.
     """
 
     symbol: str
@@ -453,22 +639,28 @@ class ExecutionState(Observation):
     quote: FreshQuote
 
 
+OrderSideLiteral = Literal["buy", "sell"]
+PositionIntentLiteral = Literal["buy_to_open", "sell_to_close"]
+
+
 class OrderPlan(Observation):
     """One fully deterministic single-leg option order. Nothing here comes from the LLM.
 
-    Fixed by the approved methodology: buy to open, limit, day. ``qty`` and
-    ``limit_price`` are set by ``risk.decide_order`` alone.
-    ``max_premium_usd`` is ``limit_price * 100 * qty``, the most this order can cost.
+    Two shapes exist: buy to open (entry, limit at the fresh ask) and sell to
+    close (exit, limit at the fresh bid). Both are limit, day. ``qty`` and
+    ``limit_price`` are set by ``risk`` alone. ``notional_usd`` is
+    ``limit_price * 100 * qty``: the most an entry can cost, the least an
+    exit brings in.
     """
 
     symbol: str
-    side: Literal["buy"] = "buy"
+    side: OrderSideLiteral = "buy"
     qty: int
     order_type: Literal["limit"] = "limit"
     time_in_force: Literal["day"] = "day"
-    position_intent: Literal["buy_to_open"] = "buy_to_open"
+    position_intent: PositionIntentLiteral = "buy_to_open"
     limit_price: float
-    max_premium_usd: float
+    notional_usd: float
     client_order_id: str
 
     @model_validator(mode="after")
@@ -478,26 +670,36 @@ class OrderPlan(Observation):
         if self.limit_price <= 0:
             raise ValueError(f"limit_price must be positive, got {self.limit_price}")
         expected = round(self.limit_price * 100 * self.qty, 2)
-        if round(self.max_premium_usd, 2) != expected:
+        if round(self.notional_usd, 2) != expected:
             raise ValueError(
-                f"max_premium_usd={self.max_premium_usd} does not equal "
-                f"limit_price * 100 * qty = {expected}"
+                f"notional_usd={self.notional_usd} does not equal limit_price * 100 * qty = {expected}"
             )
         if not self.client_order_id:
             raise ValueError("client_order_id must not be empty")
+        allowed = {("buy", "buy_to_open"), ("sell", "sell_to_close")}
+        if (self.side, self.position_intent) not in allowed:
+            raise ValueError(
+                f"side {self.side!r} with intent {self.position_intent!r} is not an allowed order shape"
+            )
         return self
 
 
 RiskReason = Literal[
+    # entry
     "no_contract",
-    "existing_spy_option_position",
-    "existing_spy_option_order",
+    "pending_order_conflict",
+    "duplicate_symbol",
+    "max_positions",
     "market_closed",
     "too_close_to_close",
     "unacceptable_quote",
-    "premium_over_cap",
-    "insufficient_options_buying_power",
     "unknown_buying_power",
+    "premium_over_cap",
+    "total_premium_over_cap",
+    "insufficient_options_buying_power",
+    # exit
+    "no_position",
+    "position_mismatch",
 ]
 
 
@@ -540,34 +742,28 @@ class OrderReceipt(Observation):
     error: str | None = None
 
 
-RunMode = Literal["dry_run", "execute"]
-CycleOutcome = Literal["hold", "no_contract", "rejected", "planned", "submitted", "error"]
+ActionKind = Literal["close", "open"]
+ActionOutcome = Literal["planned", "submitted", "rejected", "no_contract", "error"]
 
 
-class CycleRecord(Observation):
-    """One line of the cycle journal: everything one cycle saw and decided.
-
-    ``outcome`` is the headline: ``hold`` (gates or proposal), ``no_contract``
-    (selector), ``rejected`` (risk), ``planned`` (approved, dry run),
-    ``submitted`` (approved and Alpaca accepted the order), ``error`` (a read
-    or the submission failed; ``error`` names the step and exception type).
+class ActionResult(Observation):
+    """One requested action (close this symbol, or open one new contract) and
+    everything deterministic code did with it. An action's failure never
+    touches another action: each carries its own outcome and error.
     """
 
-    cycle_id: str
-    started_at: UtcDatetime
-    finished_at: UtcDatetime
-    mode: RunMode
-    outcome: CycleOutcome
-    forced_action: TradeAction | None = None
-    proposal: TradeProposal | None = None
+    kind: ActionKind
+    symbol: str
+    direction: EntryDirection | None = None
     selection: SelectionResult | None = None
     execution_state: ExecutionState | None = None
     risk: RiskDecision | None = None
     receipt: OrderReceipt | None = None
+    outcome: ActionOutcome
     error: str | None = None
 
     @model_validator(mode="after")
-    def _outcome_agrees_with_its_fields(self) -> CycleRecord:
+    def _outcome_agrees_with_its_fields(self) -> ActionResult:
         if (self.outcome == "error") != (self.error is not None):
             raise ValueError("outcome 'error' must carry an error message, and only then")
         if self.outcome == "submitted" and not (self.receipt is not None and self.receipt.submitted):
@@ -576,6 +772,49 @@ class CycleRecord(Observation):
             raise ValueError("outcome 'planned' requires an approved risk decision")
         if self.outcome == "rejected" and not (self.risk is not None and not self.risk.approved):
             raise ValueError("outcome 'rejected' requires a refused risk decision")
-        if self.outcome in ("planned", "rejected", "hold", "no_contract") and self.receipt is not None:
+        if self.outcome == "no_contract" and (self.selection is None or self.selection.status == "selected"):
+            raise ValueError("outcome 'no_contract' requires a selection that chose nothing")
+        if self.outcome in ("planned", "rejected", "no_contract") and self.receipt is not None:
             raise ValueError(f"outcome {self.outcome!r} cannot carry an order receipt")
+        return self
+
+
+RunMode = Literal["dry_run", "execute"]
+CycleOutcome = Literal["wait", "hold", "planned", "submitted", "rejected", "error"]
+
+
+class CycleRecord(Observation):
+    """One line of the cycle journal: everything one cycle saw, decided and did.
+
+    ``evidence`` is the complete briefing the model received (features, news,
+    gates, portfolio with memos), so a line can be replayed. ``outcome`` is
+    the aggregate of ``actions``: ``submitted`` if any order went out,
+    ``planned`` if any was approved in a dry run, ``rejected`` if actions were
+    requested and none got through, ``hold`` if positions exist and nothing
+    was requested, ``wait`` if the account is flat and nothing was requested,
+    ``error`` only when the cycle itself failed before its actions.
+    """
+
+    cycle_id: str
+    started_at: UtcDatetime
+    finished_at: UtcDatetime
+    mode: RunMode
+    outcome: CycleOutcome
+    forced: str | None = None
+    evidence: EvidencePacket | None = None
+    decision: PortfolioDecision | None = None
+    actions: tuple[ActionResult, ...] = ()
+    error: str | None = None
+
+    @model_validator(mode="after")
+    def _outcome_agrees_with_its_fields(self) -> CycleRecord:
+        if (self.outcome == "error") != (self.error is not None):
+            raise ValueError("outcome 'error' must carry an error message, and only then")
+        outcomes = {a.outcome for a in self.actions}
+        if self.outcome == "submitted" and "submitted" not in outcomes:
+            raise ValueError("outcome 'submitted' requires a submitted action")
+        if self.outcome == "planned" and ("planned" not in outcomes or "submitted" in outcomes):
+            raise ValueError("outcome 'planned' requires a planned action and no submitted one")
+        if self.outcome in ("wait", "hold") and self.actions:
+            raise ValueError(f"outcome {self.outcome!r} cannot carry actions")
         return self

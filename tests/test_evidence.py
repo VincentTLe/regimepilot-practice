@@ -115,6 +115,13 @@ class FakePosition:
         self.asset_class = asset_class
         self.qty = "1"
         self.side = "long"
+        # Management facts, as text, the way Alpaca sends them.
+        self.avg_entry_price = "5.49"
+        self.cost_basis = "549.00"
+        self.current_price = "5.60"
+        self.unrealized_pl = "11.00"
+        self.unrealized_plpc = "0.02"
+        self.qty_available = "1"
 
 
 class FakeOrder:
@@ -214,20 +221,30 @@ def _stub_market_reads(monkeypatch):
     monkeypatch.setattr(evidence_module, "observe_news", lambda *args, **kwargs: build_news())
 
 
-def test_observe_evidence_feeds_the_real_position_state_to_the_gate(monkeypatch):
-    """The already_in_position gate reads the paper account, not a placeholder."""
+def test_every_held_spy_option_reaches_the_portfolio_and_none_holds_the_gate(monkeypatch):
+    """Approved 2026-08-27: positions are managed, not a reason to stop reasoning."""
     _stub_market_reads(monkeypatch)
-    trading = FakeTradingClient(positions=[FakePosition(SPY_CALL)])
+    spy_put = "SPY260904P00760000"
+    trading = FakeTradingClient(positions=[FakePosition(spy_put), FakePosition(SPY_CALL)])
 
-    packet = observe_evidence(trading, FakeDataClient(), FakeNewsClient())
+    packet = observe_evidence(trading, FakeDataClient(), FakeNewsClient(), now=OBSERVED_AT)
 
     assert packet.account.has_open_option_position is True
-    assert packet.gates.passed is False
-    assert packet.gates.hold_reason == "already_in_position"
+    assert packet.gates.passed is True
+    portfolio = packet.portfolio
+    assert portfolio is not None
+    assert [p.symbol for p in portfolio.positions] == [SPY_CALL, spy_put]  # sorted by symbol
+    call, put = portfolio.positions
+    assert (call.option_type, call.strike_price, str(call.expiration_date)) == ("call", 765.0, "2026-09-02")
+    assert (put.option_type, put.strike_price, str(put.expiration_date)) == ("put", 760.0, "2026-09-04")
+    assert call.qty == 1.0 and call.days_to_expiration == (call.expiration_date - OBSERVED_AT.date()).days
+    assert call.pending_order_side is None
+    assert portfolio.open_position_count == 2
+    # Two positions and no pending buy: a third entry is still allowed.
+    assert portfolio.entry_allowed is True and portfolio.entry_blocked_reason is None
 
 
-def test_an_open_spy_option_order_alone_does_not_hold_the_gate(monkeypatch):
-    """Open orders are read and kept, but whether they block is a Phase 5B decision."""
+def test_an_open_spy_option_order_is_pending_by_symbol_and_blocks_only_new_entries(monkeypatch):
     _stub_market_reads(monkeypatch)
     trading = FakeTradingClient(orders=[FakeOrder(SPY_CALL)])
 
@@ -235,6 +252,40 @@ def test_an_open_spy_option_order_alone_does_not_hold_the_gate(monkeypatch):
 
     assert packet.account.has_open_option_position is False
     assert packet.gates.passed is True
+    portfolio = packet.portfolio
+    assert [(o.symbol, o.side) for o in portfolio.pending_orders] == [(SPY_CALL, "buy")]
+    assert portfolio.entry_allowed is False
+    assert portfolio.entry_blocked_reason == "pending_buy_order"
+
+
+def test_a_failed_entry_gate_blocks_only_the_new_entry(monkeypatch):
+    """Correction 1 (2026-08-27): entry gates never freeze the held positions."""
+    monkeypatch.setattr(
+        evidence_module,
+        "observe_features",
+        lambda *args, **kwargs: build_features(session_close_at=et(10, 50)),
+    )
+    monkeypatch.setattr(evidence_module, "observe_news", lambda *args, **kwargs: build_news())
+    trading = FakeTradingClient(positions=[FakePosition(SPY_CALL)])
+
+    packet = observe_evidence(trading, FakeDataClient(), FakeNewsClient())
+
+    assert packet.gates.hold_reason == "too_close_to_close"
+    assert packet.portfolio.open_position_count == 1
+    assert packet.portfolio.entry_allowed is False
+    assert packet.portfolio.entry_blocked_reason == "too_close_to_close"
+
+
+def test_a_short_spy_option_position_is_refused_not_managed(monkeypatch):
+    _stub_market_reads(monkeypatch)
+    short = FakePosition(SPY_CALL)
+    short.side = "short"
+    trading = FakeTradingClient(positions=[short])
+
+    with pytest.raises(EvidenceError) as excinfo:
+        observe_evidence(trading, FakeDataClient(), FakeNewsClient())
+
+    assert "short" in str(excinfo.value)
 
 
 def test_observe_evidence_fails_closed_when_the_account_cannot_be_read(monkeypatch):
@@ -271,9 +322,11 @@ def test_evidence_packet_is_frozen_and_serializable():
 
 
 def test_the_evidence_module_exposes_no_trading_or_execution_helper():
+    # Evidence now assembles the portfolio (positions, pending orders), so the
+    # scan targets execution verbs only.
     forbidden = (
         "submit", "cancel", "replace", "close_position", "close_all", "exercise",
-        "order", "buy_call", "buy_put", "position", "size", "risk", "decide",
+        "place_", "buy_call", "buy_put", "sell_to", "buy_to",
     )
     offenders = [
         name

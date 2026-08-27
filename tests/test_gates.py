@@ -131,11 +131,15 @@ def test_missing_momentum_holds_when_a_return_is_unavailable():
     assert result.hold_reason == "missing_momentum"
 
 
-def test_already_in_position_holds():
-    result = evaluate_gates(build(), has_open_option_position=True)
+def test_a_held_position_is_not_an_entry_gate():
+    """Approved 2026-08-27: positions are managed, never a reason to stop reasoning."""
+    import inspect
 
-    assert result.passed is False
-    assert result.hold_reason == "already_in_position"
+    from regimepilot.gates import HoldReason
+
+    assert "already_in_position" not in HoldReason.__args__
+    assert "has_open_option_position" not in inspect.signature(evaluate_gates).parameters
+    assert evaluate_gates(build()).passed is True
 
 
 def test_mixed_momentum_is_labeled_from_opposite_sign_returns():
