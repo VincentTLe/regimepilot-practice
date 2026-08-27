@@ -183,7 +183,12 @@ class NewsEvidence(Observation):
 
 
 class AccountHint(Observation):
-    """Minimal account state needed before Phase 5 risk sizing."""
+    """Minimal account state needed before Phase 5 risk sizing.
+
+    ``has_open_option_position`` is true when the paper account holds any SPY
+    option contract, as read by Phase 5A (``AccountState``). An option on
+    another underlying does not set it.
+    """
 
     has_open_option_position: bool = False
 
@@ -336,5 +341,73 @@ class SelectionResult(Observation):
                 f"status {self.status!r} does not agree with "
                 f"selected={'set' if has_contract else 'none'}, "
                 f"reason={'set' if has_reason else 'none'}"
+            )
+        return self
+
+
+class PositionSummary(Observation):
+    """One open position: identity and size only, no price and no P&L.
+
+    ``is_spy_option`` records the classification the account flag was built
+    from, so a reader can see which line made
+    ``AccountState.has_open_spy_option_position`` true.
+    """
+
+    symbol: str
+    asset_class: str | None = None
+    side: str | None = None
+    qty: float | None = None
+    is_spy_option: bool = False
+
+
+class OpenOrderSummary(Observation):
+    """One order Alpaca reports as open. Identity only: no price, no plan.
+
+    A multi-leg parent order has no symbol of its own; ``is_spy_option`` is
+    then true when any of its legs is a SPY option.
+    """
+
+    order_id: str
+    symbol: str | None = None
+    asset_class: str | None = None
+    side: str | None = None
+    qty: float | None = None
+    status: str | None = None
+    is_spy_option: bool = False
+
+
+class AccountState(Observation):
+    """The paper account as it was at ``observed_at``: balances, holdings, open orders.
+
+    Exists only when every read succeeded: a failed or misunderstood read is
+    an error in the reader, never an empty state here, so "unknown" can never
+    be mistaken for "confirmed empty". Positions and open orders are kept
+    apart, each with its own SPY-option flag, and each flag must agree with
+    the lines it summarizes. Carries no quantity to trade, no premium limit
+    and no order plan: those are Phase 5B decisions.
+    """
+
+    observed_at: UtcDatetime
+    account_id_masked: str
+    equity: float | None = None
+    options_buying_power: float | None = None
+    positions: tuple[PositionSummary, ...] = ()
+    open_orders: tuple[OpenOrderSummary, ...] = ()
+    has_open_spy_option_position: bool = False
+    has_open_spy_option_order: bool = False
+
+    @model_validator(mode="after")
+    def _flags_agree_with_their_lines(self) -> AccountState:
+        expected_position = any(p.is_spy_option for p in self.positions)
+        expected_order = any(o.is_spy_option for o in self.open_orders)
+        if self.has_open_spy_option_position != expected_position:
+            raise ValueError(
+                f"has_open_spy_option_position={self.has_open_spy_option_position} "
+                "does not agree with the positions listed"
+            )
+        if self.has_open_spy_option_order != expected_order:
+            raise ValueError(
+                f"has_open_spy_option_order={self.has_open_spy_option_order} "
+                "does not agree with the open orders listed"
             )
         return self

@@ -98,8 +98,55 @@ def build_news(**overrides):
     return NewsPacket(**kwargs)
 
 
+API_KEY = "SUPER-SECRET-KEY"
+SECRET_KEY = "SUPER-SECRET-SECRET"
+SPY_CALL = "SPY260902C00765000"
+
+
+class FakeAccount:
+    id = "11112222-3333-4444-5555-666677778888"
+    equity = "100000.55"
+    options_buying_power = "98000.75"
+
+
+class FakePosition:
+    def __init__(self, symbol=SPY_CALL, asset_class="us_option"):
+        self.symbol = symbol
+        self.asset_class = asset_class
+        self.qty = "1"
+        self.side = "long"
+
+
+class FakeOrder:
+    def __init__(self, symbol=SPY_CALL, asset_class="us_option"):
+        self.id = "aaaabbbb-cccc-dddd-eeee-ffff00001111"
+        self.symbol = symbol
+        self.asset_class = asset_class
+        self.qty = "1"
+        self.side = "buy"
+        self.status = "new"
+        self.legs = None
+
+
 class FakeTradingClient:
-    pass
+    """Exactly the three account reads Phase 5A makes. Features are stubbed
+    separately, so nothing else is ever called on it."""
+
+    def __init__(self, *, positions=(), orders=()):
+        self._positions = list(positions)
+        self._orders = list(orders)
+        # Deliberately carries credentials so the leak test below is meaningful.
+        self.api_key = API_KEY
+        self.secret_key = SECRET_KEY
+
+    def get_account(self):
+        return FakeAccount()
+
+    def get_all_positions(self):
+        return self._positions
+
+    def get_orders(self, request):
+        return self._orders
 
 
 class FakeDataClient:
@@ -160,6 +207,57 @@ def test_observe_evidence_wraps_history_failures(monkeypatch):
     assert "minute bars" in str(excinfo.value)
     assert "RuntimeError" in str(excinfo.value)
     assert "SUPER-SECRET" not in traceback.format_exc()
+
+
+def _stub_market_reads(monkeypatch):
+    monkeypatch.setattr(evidence_module, "observe_features", lambda *args, **kwargs: build_features())
+    monkeypatch.setattr(evidence_module, "observe_news", lambda *args, **kwargs: build_news())
+
+
+def test_observe_evidence_feeds_the_real_position_state_to_the_gate(monkeypatch):
+    """The already_in_position gate reads the paper account, not a placeholder."""
+    _stub_market_reads(monkeypatch)
+    trading = FakeTradingClient(positions=[FakePosition(SPY_CALL)])
+
+    packet = observe_evidence(trading, FakeDataClient(), FakeNewsClient())
+
+    assert packet.account.has_open_option_position is True
+    assert packet.gates.passed is False
+    assert packet.gates.hold_reason == "already_in_position"
+
+
+def test_an_open_spy_option_order_alone_does_not_hold_the_gate(monkeypatch):
+    """Open orders are read and kept, but whether they block is a Phase 5B decision."""
+    _stub_market_reads(monkeypatch)
+    trading = FakeTradingClient(orders=[FakeOrder(SPY_CALL)])
+
+    packet = observe_evidence(trading, FakeDataClient(), FakeNewsClient())
+
+    assert packet.account.has_open_option_position is False
+    assert packet.gates.passed is True
+
+
+def test_observe_evidence_fails_closed_when_the_account_cannot_be_read(monkeypatch):
+    """A failed account read is never reported as 'no position'."""
+    _stub_market_reads(monkeypatch)
+    trading = FakeTradingClient(positions=[FakePosition(SPY_CALL)])
+
+    def explode():
+        raise RuntimeError(f"401 unauthorized for key={API_KEY} secret={SECRET_KEY}")
+
+    trading.get_all_positions = explode
+
+    with pytest.raises(EvidenceError) as caught:
+        observe_evidence(trading, FakeDataClient(), FakeNewsClient())
+
+    message = str(caught.value)
+    assert "positions" in message
+    rendered = "".join(
+        traceback.format_exception(type(caught.value), caught.value, caught.value.__traceback__)
+    )
+    for blob in (message, rendered):
+        assert API_KEY not in blob
+        assert SECRET_KEY not in blob
 
 
 def test_evidence_packet_is_frozen_and_serializable():

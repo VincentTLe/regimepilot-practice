@@ -2,6 +2,11 @@
 
 Combines FeaturePacket, NewsPacket and GateResult into one briefing object
 suitable for LLM direction reasoning. Read-only: no orders, no LLM calls here.
+
+Since Phase 5A the ``already_in_position`` gate is fed from the paper account
+itself (``account.observe_account``) rather than from a placeholder. A failed
+account read aborts the briefing: "unknown" must never reach the gate as
+"no position".
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from regimepilot.account import AccountError, observe_account
 from regimepilot.config import ConfigError, load_settings
 from regimepilot.console import tolerant_console
 from regimepilot.features import FeaturePacket, to_utc
@@ -101,13 +107,19 @@ def observe_evidence(
     *,
     now: datetime | None = None,
     symbol: str = UNDERLYING,
-    has_open_option_position: bool = False,
 ) -> EvidencePacket:
-    """Read features and news, evaluate gates, and return one EvidencePacket.
+    """Read features, the account and news, evaluate gates, and return one EvidencePacket.
 
-    Feature reads raise ``EvidenceError`` wrapping ``HistoryError``. News
-    failures degrade to an unavailable news packet rather than aborting the
-    whole briefing.
+    Feature reads raise ``EvidenceError`` wrapping ``HistoryError``, and the
+    account read raises it wrapping ``AccountError``: without a trustworthy
+    answer to "is there already a SPY option position?" there is no briefing.
+    News failures degrade to an unavailable news packet rather than aborting
+    the whole briefing.
+
+    Only the position flag reaches the gate and the packet. The full
+    ``AccountState`` (open orders, balances) is deliberately not attached:
+    the packet is sent verbatim to the LLM, and what it may see is a Phase 3
+    decision. Phase 5B reads the account again right before it plans an order.
     """
     observed_at = to_utc(now) if now else datetime.now(timezone.utc)
 
@@ -122,19 +134,25 @@ def observe_evidence(
         raise EvidenceError(str(error)) from None
 
     try:
+        account = observe_account(trading_client, now=observed_at)
+    except AccountError as error:
+        raise EvidenceError(str(error)) from None
+
+    try:
         news = observe_news(news_client, now=observed_at, symbol=symbol)
     except NewsError:
         news = unavailable_news_packet(observed_at=observed_at)
 
+    in_spy_option_position = account.has_open_spy_option_position
     gates = evaluate_gates(
         features,
-        has_open_option_position=has_open_option_position,
+        has_open_option_position=in_spy_option_position,
     )
     return build_evidence(
         features,
         news,
         gates,
-        has_open_option_position=has_open_option_position,
+        has_open_option_position=in_spy_option_position,
     )
 
 
