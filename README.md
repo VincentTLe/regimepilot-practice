@@ -26,6 +26,13 @@ and every order passes deterministic risk (see "Run the portfolio agent").
 | 5B-7 | Autonomous portfolio agent: HOLD/CLOSE per position, one entry per cycle, exact SELL_TO_CLOSE, paper execution, 15-minute loop | **current** |
 | 8 | Dashboard and hackathon submission | not started |
 
+**Not yet part of the numbered phases, added separately:** a pure regime
+classifier (`regime.py`) and a backtest + scoring harness (`backtest.py`,
+`score.py`, `black_scholes.py`) so a strategy change can be validated against
+history before it reaches paper trading. See "Backtest and score a strategy
+change" below. `regime.py`'s output is not yet wired into `evidence.py`'s
+`EvidencePacket`, so it does not affect the live agent's decisions yet.
+
 ## Safety rules this code enforces
 
 - Credentials are read from **environment variables only**.
@@ -213,6 +220,50 @@ and no order is pending on that symbol. Malformed model output means HOLD every
 position and open nothing. Every cycle is journaled with the full evidence,
 the decision, each action's risk verdict, plan and receipt.
 
+## Backtest and score a strategy change before it goes to paper
+
+[#backtest-and-score-a-strategy-change-before-it-goes-to-paper](#backtest-and-score-a-strategy-change-before-it-goes-to-paper)
+
+`backtest.py` replays historical SPY minute bars through the **same** pure
+pipeline the live runner uses (`features.build_feature_packet` ->
+`gates.evaluate_gates` -> `regime.classify_regime` -> `decision.stub_proposal`
+by default), so a backtest result reflects the real decision logic rather
+than a parallel approximation of it. `score.py` turns the resulting trades
+into a scorecard: win rate, profit factor, a per-trade Sharpe-like ratio, max
+drawdown, and a buy-and-hold baseline for comparison.
+
+Neither module touches the network, Alpaca, or an LLM by default, and neither
+submits anything: `run_backtest` only ever appends to an in-memory list. Two
+things are necessarily approximated because a historical SPY option chain is
+not available to this project: contract premiums are simulated with
+Black-Scholes (`black_scholes.py`) from the historical spot, a strike nearest
+the money, a fixed 7-day expiration and an assumed volatility; and a
+simulated position always closes at the same session's close rather than
+being carried and managed across days the way the live portfolio agent can.
+Both simplifications are documented in `backtest.py`'s module docstring —
+read it before trusting a scorecard number for anything beyond a relative
+comparison between two strategy variants.
+
+`regime.py` is the other new addition: a pure classifier (no network) that
+turns realized volatility, an ADX-like trend-strength reading, and (when a
+real IV history is wired in) IV rank into one of `trending_up`,
+`trending_down`, `high_vol_chop`, `low_vol_drift`, or `unknown`. `evidence.py`
+does not yet attach a `RegimeReading` to the LLM's briefing — `regime.py`
+exists and is tested, but wiring its output into `EvidencePacket` and adding
+the regime-aware confidence override described in `decision.py`'s docstring
+is the next step, not yet done here.
+
+Bring your own historical minute bars as a CSV (`timestamp,open,high,low,close,volume`,
+one row per minute); nothing here calls Alpaca's historical bars endpoint for you:
+
+```
+uv run python -m regimepilot.backtest --csv path/to/spy_minute_bars.csv
+uv run python -m regimepilot.backtest --csv path/to/spy_minute_bars.csv --json
+
+uv run python -m regimepilot.score --csv path/to/spy_minute_bars.csv
+uv run python -m regimepilot.score --csv path/to/spy_minute_bars.csv --json
+```
+
 ## Layout
 
 ```text
@@ -228,6 +279,7 @@ the decision, each action's risk verdict, plan and receipt.
 │   ├── features.py       # Phase 2B deterministic features
 │   ├── history.py        # Phase 2B Alpaca bar/quote reads
 │   ├── gates.py          # Phase 3A pre-gates + session labels
+│   ├── regime.py         # regime classification: vol + ADX-like trend + IV rank (pure, new)
 │   ├── news.py           # Phase 3B filtered Alpaca news
 │   ├── evidence.py       # Phase 3C evidence briefing assembly
 │   ├── decision.py       # Phase 3D LLM / stub trade proposal
@@ -238,6 +290,9 @@ the decision, each action's risk verdict, plan and receipt.
 │   ├── risk.py           # deterministic entry/exit risk -> OrderPlan (pure)
 │   ├── execution.py      # fresh re-check + the only paper order submission (buy/sell)
 │   ├── memory.py         # journal-backed position memory
+│   ├── black_scholes.py  # pure BS pricing + implied vol solver (pure, new)
+│   ├── backtest.py       # replay historical bars through the live pipeline (pure, new)
+│   ├── score.py          # trades -> Sharpe-like scorecard + baseline (pure, new)
 │   └── runner.py         # portfolio cycle runner, JSONL journal, 15-minute loop
 └── tests/
     ├── test_config.py
@@ -246,6 +301,7 @@ the decision, each action's risk verdict, plan and receipt.
     ├── test_features.py
     ├── test_history.py
     ├── test_gates.py
+    ├── test_regime.py         # new
     ├── test_news.py
     ├── test_evidence.py
     ├── test_decision.py
@@ -257,6 +313,9 @@ the decision, each action's risk verdict, plan and receipt.
     ├── test_execution.py
     ├── test_runner.py
     ├── test_memory.py
+    ├── test_black_scholes.py  # new
+    ├── test_backtest.py       # new
+    ├── test_score.py          # new
     └── test_mvp_end_to_end.py
 ```
 
