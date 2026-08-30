@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and Python 3.11
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          python-version: "3.11"
+
+      # --locked fails the run if uv.lock no longer matches pyproject.toml,
+      # so CI always installs exactly the committed dependency set.
+      - name: Install dependencies from uv.lock
+        run: uv sync --locked
+
+      # The suite is offline by design: every Alpaca client is faked, so no
+      # credential and no network access is needed here.
+      - name: Run tests
+        run: uv run pytest

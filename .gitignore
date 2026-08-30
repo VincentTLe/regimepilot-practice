@@ -1,0 +1,15 @@
+# Secrets. Never commit a real credential.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Local artifacts
+*.log
+logs/
