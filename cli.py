@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -641,7 +641,11 @@ def preflight() -> None:
 
 
 @app.command()
-def account() -> None:
+def account(
+    export: bool = typer.Option(
+        False, "--export", help="Also write the snapshot to logs/account.json (dashboard data)."
+    ),
+) -> None:
     """Show equity, options level, paired spreads and warnings (read-only)."""
     setup_logging()
     config, trading, _, _ = _bootstrap()
@@ -649,8 +653,9 @@ def account() -> None:
     for leg in state.legs:
         logger.info("position: {} qty={} avg_entry={}", leg.symbol, leg.qty, leg.avg_entry_price)
     spreads, warnings = pos_and_risk.pair_spreads(state.legs)
+    open_risk = pos_and_risk.open_premium_at_risk(spreads)
     typer.echo(f"equity: {state.equity}  options_level: {state.options_level}")
-    typer.echo(f"open premium at risk: {pos_and_risk.open_premium_at_risk(spreads)}")
+    typer.echo(f"open premium at risk: {open_risk}")
     for spread in spreads:
         typer.echo(
             f"  {spread.underlying} {spread.expiration} {spread.option_type} x{spread.qty} "
@@ -660,6 +665,20 @@ def account() -> None:
         typer.echo(f"  WARNING {warning}")
     for symbol in state.unparsed_positions:
         typer.echo(f"  WARNING unparsed position: {symbol}")
+    if export:
+        snapshot = {
+            "generated_at": datetime.now(timezone.utc),
+            "equity": state.equity,
+            "options_level": state.options_level,
+            "open_risk": open_risk,
+            "spreads": [asdict(s) for s in spreads],
+            "warnings": warnings,
+            "unparsed_positions": list(state.unparsed_positions),
+        }
+        path = Path("logs") / "account.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(to_json_line(snapshot) + "\n", encoding="utf-8")
+        typer.echo(f"exported {path}")
 
 
 @app.command()

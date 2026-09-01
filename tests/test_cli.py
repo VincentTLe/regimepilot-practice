@@ -294,6 +294,25 @@ def test_account_command_smoke(monkeypatch):
     assert "SPY" in result.output
 
 
+def test_account_export_writes_snapshot(monkeypatch, tmp_path):
+    trading, _, _ = make_clients(positions=[
+        fake_position(LONG_OCC, 1, 6.0, side="long"),
+        fake_position(SHORT_OCC, 1, 4.0, side="short"),
+    ])
+    monkeypatch.setattr(cli, "_bootstrap", lambda: (make_config(), trading, None, None))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli.app, ["account", "--export"])
+    assert result.exit_code == 0
+    snapshot = json.loads((tmp_path / "logs" / "account.json").read_text())
+    assert snapshot["equity"] == 100000.0
+    assert snapshot["open_risk"] == pytest.approx(200.0)  # (6.0 - 4.0) * 1 * 100
+    (spread,) = snapshot["spreads"]
+    assert spread["underlying"] == "SPY"
+    assert spread["long_symbol"] == LONG_OCC and spread["short_symbol"] == SHORT_OCC
+    assert spread["expiration"] == "2026-09-11"
+    assert "generated_at" in snapshot
+
+
 def test_candidates_command_smoke(monkeypatch):
     trading, stock, _ = make_clients()
     monkeypatch.setattr(cli, "_bootstrap", lambda: (make_config(), trading, stock, None))
