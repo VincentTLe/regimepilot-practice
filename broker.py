@@ -27,9 +27,9 @@ from alpaca.trading.requests import (
     OptionLegRequest,
 )
 
-import positions as positions_mod
+import pos_and_risk
 import settings
-from models import AccountState, Clock, Config, LegPosition, LegQuote, OrderPlan, OrderReceipt
+from data_models import AccountState, Clock, Config, LegPosition, LegQuote, OrderPlan, OrderReceipt
 
 # Plumbing constants — not trader knobs, so not in settings.yaml.
 STOCK_FEED = DataFeed.IEX
@@ -157,7 +157,7 @@ def fetch_account_state(trading: Any, whitelist: tuple[str, ...]) -> AccountStat
         if "option" not in asset_class:
             continue  # equities and anything else are out of scope
         symbol = str(position.symbol)
-        parsed = positions_mod.parse_occ(symbol)
+        parsed = pos_and_risk.parse_occ(symbol)
         qty = as_int(getattr(position, "qty", None))
         side = str(getattr(position, "side", "") or "")
         if parsed is None or qty is None or qty == 0:

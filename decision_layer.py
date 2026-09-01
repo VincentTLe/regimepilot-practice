@@ -14,7 +14,7 @@ from typing import Callable
 import httpx
 
 import settings
-from models import EntryChoice, SymbolFeatures
+from data_models import EntryChoice, SymbolFeatures
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 TIMEOUT_SECONDS = 60.0

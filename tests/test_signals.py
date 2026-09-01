@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 import signals
-from models import SymbolFeatures
+from data_models import SymbolFeatures
 
 NOW = datetime(2026, 8, 31, 15, 0, tzinfo=timezone.utc)
 BAR_SECONDS = 900  # 15m

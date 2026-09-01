@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 import options_screener as screener
-from models import LegQuote, OpenSpread
+from data_models import LegQuote, OpenSpread
 
 NOW = datetime(2026, 8, 31, 15, 0, tzinfo=timezone.utc)
 TODAY = NOW.date()
@@ -140,7 +140,7 @@ def test_rank_flattest_skew_first_with_oi_tiebreak():
     flat = leg("F", 100.0, iv=0.20, oi=100)
     flat2 = leg("F2", 105.0, iv=0.20, oi=100)
     steep = leg("S", 110.0, iv=0.35, oi=10_000)
-    from models import SpreadQuote
+    from data_models import SpreadQuote
 
     def sq(long, short, skew):
         return SpreadQuote(

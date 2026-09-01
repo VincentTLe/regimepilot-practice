@@ -19,7 +19,7 @@ from datetime import datetime
 import pandas as pd
 
 import settings
-from models import Event, SymbolFeatures
+from data_models import Event, SymbolFeatures
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:

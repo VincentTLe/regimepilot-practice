@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 import broker
-from models import LegPlan, OrderPlan
+from data_models import LegPlan, OrderPlan
 from tests.fakes import FakeTradingClient, fake_position
 
 API_KEY = "SUPER-SECRET-KEY"

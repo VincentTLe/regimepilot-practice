@@ -22,10 +22,10 @@ import broker
 import decision_layer
 import market_data
 import options_screener
-import positions as positions_mod
+import pos_and_risk
 import settings
 import signals
-from models import Config, EntryChoice, OrderPlan, SpreadQuote, SymbolFeatures, to_json_line
+from data_models import Config, EntryChoice, OrderPlan, SpreadQuote, SymbolFeatures, to_json_line
 
 JOURNAL_PATH = Path("logs") / "cycles.jsonl"
 MIN_OPTIONS_LEVEL = 3  # spreads need Alpaca options trading level 3
@@ -104,8 +104,8 @@ def run_cycle(
         append_journal(record)
         return record
 
-    spreads, warnings = positions_mod.pair_spreads(account.legs)
-    open_risk = positions_mod.open_premium_at_risk(spreads)
+    spreads, warnings = pos_and_risk.pair_spreads(account.legs)
+    open_risk = pos_and_risk.open_premium_at_risk(spreads)
     record.update(
         {
             "market_open": clock.is_open,
@@ -137,7 +137,7 @@ def run_cycle(
         for spread in spreads:
             long_q = broker.leg_quote_from_snapshot(spread.long_symbol, 0.0, snapshots.get(spread.long_symbol), None)
             short_q = broker.leg_quote_from_snapshot(spread.short_symbol, 0.0, snapshots.get(spread.short_symbol), None)
-            decision = positions_mod.exit_decision(spread, long_q, short_q, clock.server_time.date())
+            decision = pos_and_risk.exit_decision(spread, long_q, short_q, clock.server_time.date())
             if decision is None:
                 if spread.net_entry_debit is None:
                     logger.warning("cannot compute stop/TP for {} (unknown entry debit)", spread.underlying)
@@ -171,9 +171,9 @@ def run_cycle(
 
     features = _build_trading_signals(config, stock_data, mids, clock.server_time)
     busy = {s.underlying for s in spreads} | {
-        positions_mod.parse_occ(sym)[0]
+        pos_and_risk.parse_occ(sym)[0]
         for sym in account.open_order_symbols
-        if positions_mod.parse_occ(sym) is not None
+        if pos_and_risk.parse_occ(sym) is not None
     }
     candidates = []
     for c in signals.build_candidates(features, clock.is_open, config.bar_seconds):
@@ -285,7 +285,7 @@ def _attempt_entry(
         "expiration": spread.expiration, "width": spread.width,
         "net_debit": spread.net_debit, "skew": round(spread.skew, 4),
     }
-    qty, reason = positions_mod.size_entry(spread.net_debit, equity, open_risk, cycle_spent=0.0)
+    qty, reason = pos_and_risk.size_entry(spread.net_debit, equity, open_risk, cycle_spent=0.0)
     if reason is not None:
         entry["rejected"] = reason
         logger.info("entry refused by risk manager: {}", reason)
@@ -314,7 +314,7 @@ def _attempt_entry(
     if not (settings.MIN_NET_DEBIT <= fresh_debit < spread.width):
         entry["rejected"] = "recheck: bad_debit"
         return entry
-    qty, reason = positions_mod.size_entry(fresh_debit, fresh_account.equity, open_risk, cycle_spent=0.0)
+    qty, reason = pos_and_risk.size_entry(fresh_debit, fresh_account.equity, open_risk, cycle_spent=0.0)
     if reason is not None:
         entry["rejected"] = f"recheck: {reason}"
         return entry
@@ -403,9 +403,9 @@ def account() -> None:
     setup_logging()
     config, trading, _, _ = _bootstrap()
     state = broker.fetch_account_state(trading, config.symbols)
-    spreads, warnings = positions_mod.pair_spreads(state.legs)
+    spreads, warnings = pos_and_risk.pair_spreads(state.legs)
     typer.echo(f"equity: {state.equity}  options_level: {state.options_level}")
-    typer.echo(f"open premium at risk: {positions_mod.open_premium_at_risk(spreads)}")
+    typer.echo(f"open premium at risk: {pos_and_risk.open_premium_at_risk(spreads)}")
     for spread in spreads:
         typer.echo(
             f"  {spread.underlying} {spread.expiration} {spread.option_type} x{spread.qty} "

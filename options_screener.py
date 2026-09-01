@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 import settings
-from models import LegPlan, LegQuote, OpenSpread, OrderPlan, SpreadQuote
+from data_models import LegPlan, LegQuote, OpenSpread, OrderPlan, SpreadQuote
 
 # All thresholds live in settings.yaml (screener section).
 

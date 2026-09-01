@@ -15,10 +15,10 @@ spreads** as single multi-leg (MLEG) limit orders. Exits are purely mechanical.
 flowchart TB
     ES["Entry signal<br/><i>decides when to trade</i><br/>market_data.py + signals.py + decision_layer.py"]
     OS["Option screener<br/><i>finds & filters contracts</i><br/>options_screener.py"]
-    RM["Risk manager<br/><i>position size & risk limit</i><br/>positions.py"]
+    RM["Risk manager<br/><i>position size & risk limit</i><br/>pos_and_risk.py"]
     EX["Execution<br/><i>places order via Alpaca</i><br/>broker.py"]
     AS["Account state<br/><i>positions + balance</i><br/>broker.py"]
-    PM["Position manager<br/><i>stops, exit, take-profit</i><br/>positions.py"]
+    PM["Position manager<br/><i>stops, exit, take-profit</i><br/>pos_and_risk.py"]
 
     ES <--> OS
     ES --> RM
@@ -37,11 +37,11 @@ Each box in the diagram is one module:
 | Entry signal (analysis) | `signals.py` | RSI/ATR/MACD + event detection (gap, breakout, MACD cross) + entry gates (pure) |
 | Entry signal (decision) | `decision_layer.py` | LLM (OpenRouter) — or you, with `--manual-mode` — picks ≤1 entry from the event-firing candidates |
 | Option screener | `options_screener.py` | expiry pick, spread enumeration, liquidity filter, IV-skew ranking, order plans (pure) |
-| Risk manager + Position manager | `positions.py` | leg pairing, mechanical exits, equity-relative sizing (pure) |
+| Risk manager + Position manager | `pos_and_risk.py` | leg pairing, mechanical exits, equity-relative sizing (pure) |
 | Execution + Account state | `broker.py` | all env/Alpaca access; `submit_paper_order` is the only submitting function |
 | wiring | `cli.py` | typer CLI + the cycle engine + loguru logging + JSONL journal |
 | — | `settings.yaml` + `settings.py` | every trader-tunable value in one validated file |
-| — | `models.py` | frozen dataclasses shared by everything |
+| — | `data_models.py` | frozen dataclasses shared by everything |
 
 ## Settings — the one file a trader edits
 

@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 import decision_layer
-from models import Event, SymbolFeatures
+from data_models import Event, SymbolFeatures
 
 
 def candidate(symbol="SPY", events=(Event(kind="breakout_up", direction="CALL"),), block=None):
