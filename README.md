@@ -191,6 +191,21 @@ Claude Code prompt:
 - Every iteration submits real **paper** orders (`--execute`), including
   mechanical exits, and redeploys the dashboard.
 
+### Adding underlyings with `/whitelist-candidates`
+
+A second skill (`.claude/skills/whitelist-candidates/`) vets new symbols for the
+whitelist before they touch `settings.yaml`. Its read-only probe checks each
+candidate against the *current* thresholds: enough bars on the IEX feed, a
+strike grid that can form a spread in the width band, which expiries survive
+the liquid-expiry filter and how many strikes near spot carry open interest,
+and, during market hours, how many legs also clear the quote filter. It then
+confirms with `cli.py screen`, recommends, and only edits `settings.yaml` and
+this README after you pick. Example:
+
+```
+/whitelist-candidates COIN CVX TLT
+```
+
 ### Dry-run checklist: verify everything works end-to-end
 
 Run these in order, during US market hours, with your paper keys in `.env`.
