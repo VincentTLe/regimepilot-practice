@@ -150,6 +150,39 @@ paper-only. Every cycle appends one JSON line to `logs/cycles.jsonl`
 Spreads require Alpaca **options trading level 3** on the paper account; the
 agent checks this before arming an entry.
 
+### Running the `/paca-agent`
+
+> [!NOTE]
+> read this section for running this trading system as an autonomous agent 
+
+The project ships a Claude Code skill (`.claude/skills/paca-agent/`) that runs
+one full cycle with Claude as the momentum-trader entry decider: it gathers
+`candidates`, `account` and recent journal context, reasons about the entry in
+the open, pipes its pick into `run --manual-mode --execute` (the OpenRouter LLM
+is never called), verifies the entered symbol matched its stated pick, then
+redeploys the surge dashboard. Invoke it in a Claude Code session with:
+
+```
+/paca-agent
+```
+
+To run it repeatedly until the market closes, type this single line at the
+Claude Code prompt:
+
+```
+/loop 5m /paca-agent — before starting each cycle check the current time; if it is 4:01pm ET or later, or the market is closed, do NOT run the cycle: stop the loop immediately
+```
+
+- Match the interval to `bar_timeframe` in `settings.yaml` (currently 5m,
+  like `loop_interval_seconds: 300`) — one decision per completed bar; a
+  tighter interval just re-reads the same bar.
+- The deadline lives in the loop prompt, so every iteration re-checks the
+  clock and the loop ends itself at/after 4:01pm ET.
+- The loop lives in that terminal session — keep it open. Stop it anytime
+  with Ctrl+C, or via `/tasks` (kill the loop task).
+- Every iteration submits real **paper** orders (`--execute`), including
+  mechanical exits, and redeploys the dashboard.
+
 ### Dry-run checklist: verify everything works end-to-end
 
 Run these in order, during US market hours, with your paper keys in `.env`.

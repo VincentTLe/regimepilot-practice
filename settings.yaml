@@ -7,8 +7,8 @@
 # ============================================================================
 
 symbols: [SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN]   # candidate underlyings scanned every cycle
-bar_timeframe: 15m           # bar duration for signals: 5m / 15m / 1h / 1d / 1w
-loop_interval_seconds: 900   # seconds between cycles with `run --loop` (900 = 15 min)
+bar_timeframe: 5m           # bar duration for signals: 5m / 15m / 1h / 1d / 1w
+loop_interval_seconds: 300   # seconds between cycles with `run --loop` (900 = 15 min)
 
 signals:                     # technical analysis + entry events
   rsi_period: 14             # bars in the RSI average (higher = smoother, slower)
