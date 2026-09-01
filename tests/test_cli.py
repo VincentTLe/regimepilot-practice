@@ -33,6 +33,13 @@ def journal(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def silent_sounds(monkeypatch):
+    """Keep pytest quiet: no afplay/bell when test cycles submit orders."""
+    monkeypatch.setattr(cli.sounds, "play_order_sound", lambda: None)
+    monkeypatch.setattr(cli.sounds, "play_fill_sound", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def manual_answers(monkeypatch):
     """manual_mode prompts: always pick candidate 1 and accept the default direction."""
     answers = itertools.cycle(["1", ""])
@@ -386,3 +393,26 @@ def test_check_fills_never_raises_on_broken_client(monkeypatch):
     pending = {"o1": "entry SPY"}
     cli._check_fills(BrokenTrading(), pending)
     assert pending == {"o1": "entry SPY"}  # kept for a later check
+
+
+def test_settle_plays_order_sound_only_on_successful_submit(monkeypatch):
+    from types import SimpleNamespace
+
+    from data_models import OrderReceipt
+
+    played = []
+    monkeypatch.setattr(cli.sounds, "play_order_sound", lambda: played.append(True))
+    plan = SimpleNamespace(client_order_id="c1", kind="enter", qty=1, limit_price=1.0, legs=())
+
+    ok = OrderReceipt(submitted=True, client_order_id="c1", order_id="o1", status="accepted")
+    monkeypatch.setattr(cli.broker, "submit_paper_order", lambda trading, plan: ok)
+    cli._settle(object(), plan, execute=True)
+    assert played == [True]
+
+    refused = OrderReceipt(submitted=False, client_order_id="c1", error="APIError")
+    monkeypatch.setattr(cli.broker, "submit_paper_order", lambda trading, plan: refused)
+    cli._settle(object(), plan, execute=True)
+    assert played == [True]  # no second sound on a refused submit
+
+    cli._settle(object(), plan, execute=False)
+    assert played == [True]  # dry run never beeps

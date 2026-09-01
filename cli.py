@@ -351,6 +351,8 @@ def _settle(trading: object, plan: OrderPlan, execute: bool) -> dict:
         }}
     receipt = broker.submit_paper_order(trading, plan)
     logger.info("order {}: submitted={} status={} error={}", plan.client_order_id, receipt.submitted, receipt.status, receipt.error)
+    if receipt.submitted:
+        sounds.play_order_sound()
     return {"submitted": receipt.submitted, "order_id": receipt.order_id, "status": receipt.status,
             "error": receipt.error, "client_order_id": receipt.client_order_id}
 
