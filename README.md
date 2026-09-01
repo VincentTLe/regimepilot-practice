@@ -5,6 +5,11 @@ Options vertical spreads, paper only. An autonomous paper-trading agent for the 
 underlyings**, lets an LLM pick at most one entry, and trades **debit vertical
 spreads** as single multi-leg (MLEG) limit orders. Exits are purely mechanical.
 
+> [!TIP]
+> **Live dashboard**: [alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh](https://alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh)
+> — cycle journal, open positions, and trading config, refreshed on every
+> [`/paca-agent` run](#running-the-paca-agent).
+
 > **Full rewrite (2026-08-31).** The previous phased single-underlying package
 > (`src/regimepilot/`) was replaced with 7 flat modules. The old code lives in
 > git history.
