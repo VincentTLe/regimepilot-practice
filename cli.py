@@ -1,0 +1,438 @@
+"""Typer CLI + the cycle engine that wires the diagram together.
+
+Entry signal + option screener -> risk manager -> execution -> account state
+-> position manager. Dry run is the default; --execute is the only way an
+order reaches Alpaca (paper endpoint, enforced in broker.py).
+
+Run as: uv run --env-file .env python cli.py <command>
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+from dataclasses import replace
+from datetime import datetime, timezone
+from pathlib import Path
+
+import typer
+from loguru import logger
+
+import broker
+import llm
+import market_data
+import positions as positions_mod
+import screener
+import signals
+from models import Config, EntryChoice, OrderPlan, SpreadQuote, SymbolFeatures, to_json_line
+
+JOURNAL_PATH = Path("logs") / "cycles.jsonl"
+MIN_OPTIONS_LEVEL = 3  # spreads need Alpaca options trading level 3
+
+app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+
+def setup_logging() -> None:
+    logger.remove()
+    logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <7} | {message}")
+
+
+def append_journal(record: dict) -> None:
+    JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with JOURNAL_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(to_json_line(record) + "\n")
+
+
+def _bootstrap() -> tuple[Config, object, object, object]:
+    config = broker.load_config()
+    trading, stock_data, option_data = broker.build_clients(config)
+    return config, trading, stock_data, option_data
+
+
+def _screen_spread(
+    trading: object,
+    option_data: object,
+    underlying: str,
+    direction: str,
+    spot: float,
+    clock_time: datetime,
+    today,
+) -> tuple[SpreadQuote | None, dict]:
+    """Fetch chain + snapshots for one underlying and pick the best spread."""
+    by_expiry = broker.fetch_contracts(trading, underlying, direction, spot, today)
+    expiration = screener.pick_expiration(set(by_expiry), today)
+    if expiration is None:
+        return None, {"no_expiration": 1}
+    contracts = by_expiry[expiration]
+    snapshots = broker.fetch_option_snapshots(
+        option_data, [c["symbol"] for c in contracts.values()]
+    )
+    quotes_by_strike = {
+        strike: broker.leg_quote_from_snapshot(
+            info["symbol"], strike, snapshots.get(info["symbol"]), info["open_interest"]
+        )
+        for strike, info in contracts.items()
+    }
+    return screener.select_spread(
+        quotes_by_strike, direction, spot, expiration, underlying, clock_time
+    )
+
+
+def run_cycle(
+    config: Config,
+    trading: object,
+    stock_data: object,
+    option_data: object,
+    *,
+    execute: bool,
+    use_stub: bool,
+    llm_transport: object | None = None,
+) -> dict:
+    """One full cycle. Returns the journal record (also appended to the journal)."""
+    started = datetime.now(timezone.utc)
+    cycle_id = started.strftime("%Y%m%d-%H%M%S")
+    record: dict = {"cycle_id": cycle_id, "started_at": started, "dry_run": not execute}
+
+    try:
+        clock = broker.fetch_clock(trading)
+        account = broker.fetch_account_state(trading, config.symbols)
+    except broker.BrokerError as error:
+        logger.error("cycle aborted: {}", error)
+        record["outcome"] = "error"
+        record["error"] = str(error)
+        append_journal(record)
+        return record
+
+    spreads, warnings = positions_mod.pair_spreads(account.legs)
+    open_risk = positions_mod.open_premium_at_risk(spreads)
+    record.update(
+        {
+            "market_open": clock.is_open,
+            "equity": account.equity,
+            "options_level": account.options_level,
+            "open_spreads": [f"{s.underlying} {s.expiration} {s.option_type} x{s.qty}" for s in spreads],
+            "open_risk": open_risk,
+            "warnings": warnings + [f"unparsed position: {p}" for p in account.unparsed_positions],
+        }
+    )
+    for warning in record["warnings"]:
+        logger.warning(warning)
+
+    if not clock.is_open:
+        logger.info("market closed; nothing to do")
+        record["outcome"] = "market_closed"
+        append_journal(record)
+        return record
+
+    # --- Position manager: mechanical exits run first and are never gated ---
+    exits: list[dict] = []
+    if spreads:
+        leg_symbols = [s for spread in spreads for s in (spread.long_symbol, spread.short_symbol)]
+        try:
+            snapshots = broker.fetch_option_snapshots(option_data, leg_symbols)
+        except broker.BrokerError as error:
+            logger.error("exit snapshot read failed: {}", error)
+            snapshots = {}
+        for spread in spreads:
+            long_q = broker.leg_quote_from_snapshot(spread.long_symbol, 0.0, snapshots.get(spread.long_symbol), None)
+            short_q = broker.leg_quote_from_snapshot(spread.short_symbol, 0.0, snapshots.get(spread.short_symbol), None)
+            decision = positions_mod.exit_decision(spread, long_q, short_q, clock.server_time.date())
+            if decision is None:
+                if spread.net_entry_debit is None:
+                    logger.warning("cannot compute stop/TP for {} (unknown entry debit)", spread.underlying)
+                continue
+            entry: dict = {
+                "spread": f"{spread.underlying} {spread.expiration} {spread.option_type}",
+                "reason": decision.reason,
+                "net_mark": decision.net_mark,
+            }
+            if {spread.long_symbol, spread.short_symbol} & account.open_order_symbols:
+                entry["skipped"] = "pending_order"
+            else:
+                plan = screener.build_exit_plan(spread, long_q, short_q, cycle_id)
+                if plan is None:
+                    entry["skipped"] = "no_quote"
+                else:
+                    entry["receipt"] = _settle(trading, plan, execute)
+            exits.append(entry)
+            logger.info("exit {}: {}", entry["spread"], entry.get("receipt", entry.get("skipped")))
+    record["exits"] = exits
+
+    # --- Entry signal: OHLCV -> indicators -> events -> gates, per symbol ---
+    try:
+        mids = broker.fetch_spot_mids(stock_data, config.symbols)
+    except broker.BrokerError as error:
+        logger.error("quote read failed: {}", error)
+        record["outcome"] = "error"
+        record["error"] = str(error)
+        append_journal(record)
+        return record
+
+    features = _build_features(config, stock_data, mids, clock.server_time)
+    busy = {s.underlying for s in spreads} | {
+        positions_mod.parse_occ(sym)[0]
+        for sym in account.open_order_symbols
+        if positions_mod.parse_occ(sym) is not None
+    }
+    candidates = []
+    for c in signals.build_candidates(features, clock.is_open, config.bar_seconds):
+        if c.gate_block is None and c.symbol in busy:
+            # a held/pending underlying is not a candidate
+            c = replace(c, gate_block="already_held")
+        candidates.append(c)
+    record["candidates"] = [
+        {"symbol": c.symbol, "events": [e.kind for e in c.events], "rsi": c.rsi,
+         "atr": c.atr, "macd_hist": c.macd_hist, "gate_block": c.gate_block}
+        for c in candidates
+    ]
+    tradeable = [c for c in candidates if c.gate_block is None]
+    logger.info("candidates passing gates: {}", [c.symbol for c in tradeable] or "none")
+
+    # --- Decision + screener + risk + execution ---
+    record["entry"] = None
+    choice = _decide(tradeable, config, use_stub, llm_transport) if tradeable else None
+    if choice is not None:
+        record["entry"] = _attempt_entry(
+            choice, features[choice.symbol].mid, config, trading, option_data,
+            account.equity, open_risk, account.open_order_symbols, clock, cycle_id, execute,
+        )
+
+    submitted = [e for e in exits if e.get("receipt", {}).get("submitted")] or (
+        record["entry"] or {}
+    ).get("receipt", {}).get("submitted")
+    record["outcome"] = "submitted" if submitted else ("planned" if not execute and (exits or record["entry"]) else "hold")
+    append_journal(record)
+    return record
+
+
+def _build_features(
+    config: Config, stock_data: object, mids: dict, now: datetime
+) -> dict[str, SymbolFeatures]:
+    """One OHLCV fetch + indicator pass per whitelisted symbol.
+
+    A failed symbol is marked data_error and skipped, never invented — one bad
+    symbol must not kill the cycle.
+    """
+    features: dict[str, SymbolFeatures] = {}
+    for symbol in config.symbols:
+        try:
+            frame = market_data.fetch_ohlcv(stock_data, symbol, config.bar_timeframe, now)
+            frame = signals.add_indicators(frame)
+            features[symbol] = signals.build_signal(
+                symbol, frame, mids.get(symbol), now, config.bar_seconds
+            )
+        except market_data.MarketDataError as error:
+            logger.warning("{}", error)
+            features[symbol] = SymbolFeatures(
+                symbol=symbol, mid=mids.get(symbol), rsi=None, atr=None, macd_hist=None,
+                events=(), bar_age_seconds=None, gate_block="data_error",
+            )
+    return features
+
+
+def _decide(tradeable, config: Config, use_stub: bool, llm_transport) -> EntryChoice | None:
+    if use_stub:
+        choice = llm.stub_decide(tradeable)
+    else:
+        if not config.openrouter_api_key:
+            logger.error("OPENROUTER_API_KEY missing; use --stub or set the key")
+            return None
+        try:
+            choice = llm.decide_entry(tradeable, config.openrouter_api_key, transport=llm_transport)
+        except llm.LlmError as error:
+            logger.error("LLM decision failed, holding: {}", error)
+            return None
+    if choice:
+        logger.info("entry choice: {} {} ({})", choice.symbol, choice.direction, choice.model)
+    else:
+        logger.info("no entry this cycle")
+    return choice
+
+
+def _attempt_entry(
+    choice: EntryChoice,
+    spot: float | None,
+    config: Config,
+    trading: object,
+    option_data: object,
+    equity: float | None,
+    open_risk: float | None,
+    pending_symbols: frozenset[str],
+    clock,
+    cycle_id: str,
+    execute: bool,
+) -> dict:
+    entry: dict = {"symbol": choice.symbol, "direction": choice.direction, "thesis": choice.thesis, "model": choice.model}
+    if spot is None:
+        entry["rejected"] = "missing_quote"
+        return entry
+    try:
+        spread, rejections = _screen_spread(
+            trading, option_data, choice.symbol, choice.direction, spot,
+            clock.server_time, clock.server_time.date(),
+        )
+    except broker.BrokerError as error:
+        entry["rejected"] = str(error)
+        return entry
+    entry["screen_rejections"] = rejections
+    if spread is None:
+        entry["rejected"] = "no_spread"
+        logger.info("no acceptable spread for {} {}", choice.symbol, choice.direction)
+        return entry
+    entry["spread"] = {
+        "long": spread.long.symbol, "short": spread.short.symbol,
+        "expiration": spread.expiration, "width": spread.width,
+        "net_debit": spread.net_debit, "skew": round(spread.skew, 4),
+    }
+    qty, reason = positions_mod.size_entry(spread.net_debit, equity, open_risk, cycle_spent=0.0)
+    if reason is not None:
+        entry["rejected"] = reason
+        logger.info("entry refused by risk manager: {}", reason)
+        return entry
+    entry["qty"] = qty
+
+    # Fresh pre-submit re-check: account conflicts + re-quoted legs against a fresh clock.
+    try:
+        fresh_clock = broker.fetch_clock(trading)
+        fresh_account = broker.fetch_account_state(trading, config.symbols)
+        fresh_snaps = broker.fetch_option_snapshots(option_data, [spread.long.symbol, spread.short.symbol])
+    except broker.BrokerError as error:
+        entry["rejected"] = f"recheck: {error}"
+        return entry
+    if {spread.long.symbol, spread.short.symbol} & fresh_account.open_order_symbols:
+        entry["rejected"] = "pending_order_conflict"
+        return entry
+    long_q = broker.leg_quote_from_snapshot(spread.long.symbol, spread.long.strike, fresh_snaps.get(spread.long.symbol), spread.long.open_interest)
+    short_q = broker.leg_quote_from_snapshot(spread.short.symbol, spread.short.strike, fresh_snaps.get(spread.short.symbol), spread.short.open_interest)
+    for leg in (long_q, short_q):
+        failure = screener.check_leg(leg, fresh_clock.server_time)
+        if failure is not None:
+            entry["rejected"] = f"recheck: {failure}"
+            return entry
+    fresh_debit = round(long_q.ask - short_q.bid, 2)  # type: ignore[operator]
+    if not (screener.MIN_NET_DEBIT <= fresh_debit < spread.width):
+        entry["rejected"] = "recheck: bad_debit"
+        return entry
+    qty, reason = positions_mod.size_entry(fresh_debit, fresh_account.equity, open_risk, cycle_spent=0.0)
+    if reason is not None:
+        entry["rejected"] = f"recheck: {reason}"
+        return entry
+    if execute and (fresh_account.options_level or 0) < MIN_OPTIONS_LEVEL:
+        entry["rejected"] = "options_level_too_low"
+        return entry
+
+    fresh_spread = SpreadQuote(
+        underlying=spread.underlying, direction=spread.direction, expiration=spread.expiration,
+        long=long_q, short=short_q, width=spread.width, net_debit=fresh_debit, skew=spread.skew,
+    )
+    plan = screener.build_entry_plan(fresh_spread, qty, cycle_id)
+    entry["receipt"] = _settle(trading, plan, execute)
+    return entry
+
+
+def _settle(trading: object, plan: OrderPlan, execute: bool) -> dict:
+    if not execute:
+        return {"submitted": False, "dry_run": True, "plan": {
+            "kind": plan.kind, "qty": plan.qty, "limit_price": plan.limit_price,
+            "legs": [f"{l.side} {l.symbol}" for l in plan.legs],
+            "client_order_id": plan.client_order_id,
+        }}
+    receipt = broker.submit_paper_order(trading, plan)
+    logger.info("order {}: submitted={} status={} error={}", plan.client_order_id, receipt.submitted, receipt.status, receipt.error)
+    return {"submitted": receipt.submitted, "order_id": receipt.order_id, "status": receipt.status,
+            "error": receipt.error, "client_order_id": receipt.client_order_id}
+
+
+@app.command()
+def run(
+    execute: bool = typer.Option(False, help="Actually submit paper orders (dry run otherwise)."),
+    stub: bool = typer.Option(False, help="Rule-based decision instead of the LLM."),
+    loop: bool = typer.Option(False, help="Run forever on an interval."),
+    interval: int = typer.Option(900, help="Seconds between cycles with --loop."),
+) -> None:
+    """Run one trading cycle (or loop). Paper only; dry run unless --execute."""
+    setup_logging()
+    config, trading, stock_data, option_data = _bootstrap()
+    if execute:
+        logger.warning("ARMED: paper order submission is enabled")
+    while True:
+        record = run_cycle(config, trading, stock_data, option_data, execute=execute, use_stub=stub)
+        logger.info("cycle {} outcome: {}", record["cycle_id"], record.get("outcome"))
+        if not loop:
+            break
+        time.sleep(interval)
+
+
+@app.command()
+def account() -> None:
+    """Show equity, options level, paired spreads and warnings (read-only)."""
+    setup_logging()
+    config, trading, _, _ = _bootstrap()
+    state = broker.fetch_account_state(trading, config.symbols)
+    spreads, warnings = positions_mod.pair_spreads(state.legs)
+    typer.echo(f"equity: {state.equity}  options_level: {state.options_level}")
+    typer.echo(f"open premium at risk: {positions_mod.open_premium_at_risk(spreads)}")
+    for spread in spreads:
+        typer.echo(
+            f"  {spread.underlying} {spread.expiration} {spread.option_type} x{spread.qty} "
+            f"long={spread.long_symbol} short={spread.short_symbol} entry_debit={spread.net_entry_debit}"
+        )
+    for warning in warnings:
+        typer.echo(f"  WARNING {warning}")
+    for symbol in state.unparsed_positions:
+        typer.echo(f"  WARNING unparsed position: {symbol}")
+
+
+@app.command()
+def candidates() -> None:
+    """Show indicators, events and gate results for every whitelisted symbol (read-only)."""
+    setup_logging()
+    config, trading, stock_data, _ = _bootstrap()
+    clock = broker.fetch_clock(trading)
+    mids = broker.fetch_spot_mids(stock_data, config.symbols)
+    features = _build_features(config, stock_data, mids, clock.server_time)
+    for c in signals.build_candidates(features, clock.is_open, config.bar_seconds):
+        events = ",".join(e.kind for e in c.events) or "-"
+        rsi = f"{c.rsi:.1f}" if c.rsi is not None else "-"
+        atr = f"{c.atr:.3f}" if c.atr is not None else "-"
+        hist = f"{c.macd_hist:+.4f}" if c.macd_hist is not None else "-"
+        typer.echo(
+            f"{c.symbol:<6} mid={c.mid} rsi={rsi} atr={atr} macd_hist={hist} "
+            f"events={events} gate={c.gate_block or 'PASS'}"
+        )
+
+
+@app.command()
+def screen(
+    symbol: str = typer.Argument(..., help="Underlying symbol, e.g. SPY"),
+    direction: str = typer.Option(..., "--direction", help="CALL or PUT"),
+) -> None:
+    """Show the exact spread the screener would pick (read-only, no LLM, no order)."""
+    setup_logging()
+    direction = direction.upper()
+    if direction not in ("CALL", "PUT"):
+        raise typer.BadParameter("--direction must be CALL or PUT")
+    config, trading, stock_data, option_data = _bootstrap()
+    clock = broker.fetch_clock(trading)
+    symbol = symbol.upper()
+    spot = broker.fetch_spot_mids(stock_data, (symbol,))[symbol]
+    if spot is None:
+        typer.echo("no usable underlying quote")
+        raise typer.Exit(1)
+    spread, rejections = _screen_spread(
+        trading, option_data, symbol, direction, spot, clock.server_time, clock.server_time.date()
+    )
+    typer.echo(f"spot: {spot}  rejections: {rejections}")
+    if spread is None:
+        typer.echo("no acceptable spread")
+        raise typer.Exit(1)
+    typer.echo(
+        f"{spread.direction} {spread.underlying} {spread.expiration}: "
+        f"long {spread.long.symbol} @ {spread.long.strike} / short {spread.short.symbol} @ {spread.short.strike}\n"
+        f"width={spread.width} net_debit={spread.net_debit} skew={spread.skew:.4f} "
+        f"OI long/short={spread.long.open_interest}/{spread.short.open_interest}"
+    )
+
+
+if __name__ == "__main__":
+    app()
