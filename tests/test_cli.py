@@ -54,6 +54,7 @@ def spy_only_whitelist(monkeypatch):
 
     monkeypatch.setattr(settings, "SYMBOLS", ("SPY",))
     monkeypatch.setattr(settings, "PER_ENTRY_FRACTION", 0.005)
+    monkeypatch.setattr(settings, "PER_UNDERLYING_FRACTION", 0.02)
     monkeypatch.setattr(settings, "MIN_WIDTH_PCT", 0.03)
     monkeypatch.setattr(settings, "MAX_WIDTH_PCT", 0.05)
 

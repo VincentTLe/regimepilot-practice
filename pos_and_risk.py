@@ -146,17 +146,25 @@ def size_entry(
     net_debit: float,
     equity: float | None,
     open_risk: float | None,
+    underlying_risk: float | None,
     cycle_spent: float,
 ) -> tuple[int, str | None]:
-    """Contracts to buy for one spread entry, or (0, reason) when refused."""
+    """Contracts to buy for one spread entry, or (0, reason) when refused.
+
+    `underlying_risk` is the open premium already at risk on the entry's own
+    underlying, so held spreads plus this entry stay under the per-underlying cap.
+    """
     if equity is None or equity <= 0:
         return 0, "unknown_equity"
     if open_risk is None:
         return 0, "unknown_open_risk"
+    if underlying_risk is None:
+        return 0, "unknown_underlying_risk"
     if net_debit <= 0:
         return 0, "bad_debit"
     rooms = {
         "per_entry": settings.PER_ENTRY_FRACTION * equity,
+        "per_underlying": settings.PER_UNDERLYING_FRACTION * equity - underlying_risk,
         "per_cycle": settings.PER_CYCLE_FRACTION * equity - cycle_spent,
         "total": settings.TOTAL_FRACTION * equity - open_risk - cycle_spent,
     }

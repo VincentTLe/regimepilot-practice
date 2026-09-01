@@ -14,6 +14,7 @@ TODAY = date(2026, 8, 31)
 def pinned_risk_fractions(monkeypatch):
     """Sizing tests assume these caps regardless of trader edits to settings.yaml."""
     monkeypatch.setattr(settings, "PER_ENTRY_FRACTION", 0.005)
+    monkeypatch.setattr(settings, "PER_UNDERLYING_FRACTION", 0.02)
     monkeypatch.setattr(settings, "PER_CYCLE_FRACTION", 0.01)
     monkeypatch.setattr(settings, "TOTAL_FRACTION", 0.10)
 
@@ -188,30 +189,41 @@ def test_open_premium_at_risk_sums_or_refuses():
 
 def test_size_entry_caps_on_100k_equity():
     # per-entry cap 0.5% of 100k = $500; debit $2.00 -> $200/contract -> qty 2
-    qty, reason = pos_and_risk.size_entry(2.0, 100_000.0, 0.0, 0.0)
+    qty, reason = pos_and_risk.size_entry(2.0, 100_000.0, 0.0, 0.0, 0.0)
     assert (qty, reason) == (2, None)
 
 
 def test_size_entry_refusals():
-    assert pos_and_risk.size_entry(2.0, None, 0.0, 0.0) == (0, "unknown_equity")
-    assert pos_and_risk.size_entry(2.0, 0.0, 0.0, 0.0) == (0, "unknown_equity")
-    assert pos_and_risk.size_entry(2.0, 100_000.0, None, 0.0) == (0, "unknown_open_risk")
-    assert pos_and_risk.size_entry(0.0, 100_000.0, 0.0, 0.0) == (0, "bad_debit")
-    assert pos_and_risk.size_entry(6.0, 100_000.0, 0.0, 0.0) == (
+    assert pos_and_risk.size_entry(2.0, None, 0.0, 0.0, 0.0) == (0, "unknown_equity")
+    assert pos_and_risk.size_entry(2.0, 0.0, 0.0, 0.0, 0.0) == (0, "unknown_equity")
+    assert pos_and_risk.size_entry(2.0, 100_000.0, None, 0.0, 0.0) == (0, "unknown_open_risk")
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 0.0, None, 0.0) == (0, "unknown_underlying_risk")
+    assert pos_and_risk.size_entry(0.0, 100_000.0, 0.0, 0.0, 0.0) == (0, "bad_debit")
+    assert pos_and_risk.size_entry(6.0, 100_000.0, 0.0, 0.0, 0.0) == (
         0, "risk_caps: per_entry room $500 < contract cost $600"
     )
 
 
 def test_size_entry_cycle_and_total_room():
     # cycle cap 1% = $1000; already spent $900 -> only $100 left -> qty 0 at $2 debit
-    assert pos_and_risk.size_entry(2.0, 100_000.0, 0.0, 900.0) == (
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 0.0, 0.0, 900.0) == (
         0, "risk_caps: per_cycle room $100 < contract cost $200"
     )
     # total cap 10% = $10k; open risk $9,900 -> $100 room -> refused
-    assert pos_and_risk.size_entry(2.0, 100_000.0, 9_900.0, 0.0) == (
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 9_900.0, 0.0, 0.0) == (
         0, "risk_caps: total room $100 < contract cost $200"
     )
     # open risk exactly at cap -> refused
-    assert pos_and_risk.size_entry(2.0, 100_000.0, 10_000.0, 0.0) == (
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 10_000.0, 0.0, 0.0) == (
         0, "risk_caps: total room $0 < contract cost $200"
     )
+
+
+def test_size_entry_per_underlying_room():
+    # per-underlying cap 2% = $2,000; $1,900 already at risk on this underlying
+    # -> $100 room -> refused at $2 debit even though every other cap has room
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 1_900.0, 1_900.0, 0.0) == (
+        0, "risk_caps: per_underlying room $100 < contract cost $200"
+    )
+    # $1,500 at risk on this underlying -> $500 room -> per-entry still allows qty 2
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 1_500.0, 1_500.0, 0.0) == (2, None)

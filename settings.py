@@ -90,7 +90,8 @@ _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
                   "strike_band_pct", "otm_only", "min_width_pct", "max_width_pct",
                   "min_open_interest", "max_quote_age_seconds", "max_leg_spread_bps",
                   "min_net_debit"}
-_RISK_KEYS = {"per_entry_fraction", "per_cycle_fraction", "total_fraction"}
+_RISK_KEYS = {"per_entry_fraction", "per_underlying_fraction", "per_cycle_fraction",
+              "total_fraction"}
 _EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit"}
 _LLM_KEYS = {"primary_model", "fallback_models"}
 
@@ -148,10 +149,15 @@ def validate(raw: object) -> dict[str, object]:
 
     risk = _section(raw, "risk", _RISK_KEYS)
     values["PER_ENTRY_FRACTION"] = _number(risk, "risk", "per_entry_fraction", 0, 1, lo_open=True)
+    values["PER_UNDERLYING_FRACTION"] = _number(risk, "risk", "per_underlying_fraction", 0, 1, lo_open=True)
     values["PER_CYCLE_FRACTION"] = _number(risk, "risk", "per_cycle_fraction", 0, 1, lo_open=True)
     values["TOTAL_FRACTION"] = _number(risk, "risk", "total_fraction", 0, 1, lo_open=True)
-    if values["PER_ENTRY_FRACTION"] > values["TOTAL_FRACTION"]:
-        _fail("risk.per_entry_fraction", "must not exceed total_fraction", risk["per_entry_fraction"])
+    if values["PER_ENTRY_FRACTION"] > values["PER_UNDERLYING_FRACTION"]:
+        _fail("risk.per_entry_fraction", "must not exceed per_underlying_fraction",
+              risk["per_entry_fraction"])
+    if values["PER_UNDERLYING_FRACTION"] > values["TOTAL_FRACTION"]:
+        _fail("risk.per_underlying_fraction", "must not exceed total_fraction",
+              risk["per_underlying_fraction"])
 
     exits = _section(raw, "exits", _EXIT_KEYS)
     values["STOP_FRACTION"] = _number(exits, "exits", "stop_fraction", 0, 1, lo_open=True, hi_open=True)
@@ -213,6 +219,7 @@ MAX_QUOTE_AGE_SECONDS: float = _VALUES["MAX_QUOTE_AGE_SECONDS"]  # type: ignore[
 MAX_LEG_SPREAD_BPS: float = _VALUES["MAX_LEG_SPREAD_BPS"]  # type: ignore[assignment]
 MIN_NET_DEBIT: float = _VALUES["MIN_NET_DEBIT"]  # type: ignore[assignment]
 PER_ENTRY_FRACTION: float = _VALUES["PER_ENTRY_FRACTION"]  # type: ignore[assignment]
+PER_UNDERLYING_FRACTION: float = _VALUES["PER_UNDERLYING_FRACTION"]  # type: ignore[assignment]
 PER_CYCLE_FRACTION: float = _VALUES["PER_CYCLE_FRACTION"]  # type: ignore[assignment]
 TOTAL_FRACTION: float = _VALUES["TOTAL_FRACTION"]  # type: ignore[assignment]
 STOP_FRACTION: float = _VALUES["STOP_FRACTION"]  # type: ignore[assignment]

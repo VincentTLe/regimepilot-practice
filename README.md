@@ -81,9 +81,9 @@ All numbers below are the shipped `settings.yaml` defaults — change them there
   `(width − debit) / debit`, highest first (ties → tighter combined leg
   quotes). Full methodology and the alternatives considered:
   [SPREAD_SELECTION.md](SPREAD_SELECTION.md).
-- **Risk (from live equity, every cycle)**: per entry ≤ 1% of equity, new
-  premium per cycle ≤ 1%, total open premium at risk ≤ 10%. Unknown equity or
-  unknown open risk refuses entries.
+- **Risk (from live equity, every cycle)**: per entry ≤ 1% of equity, open
+  premium per underlying ≤ 2%, new premium per cycle ≤ 1%, total open premium
+  at risk ≤ 10%. Unknown equity or unknown open risk refuses entries.
 - **Exits (mechanical only, before entries, every cycle)**: close the spread
   when net mark ≤ −50% of entry debit, ≥ +100%, DTE ≤ 2, or — the **reversal
   exit** (`reversal_exit: true`) — when an entry event fires *against* the

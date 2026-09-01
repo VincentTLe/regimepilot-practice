@@ -41,7 +41,8 @@ def broken(mutate) -> dict:
         (lambda r: r["exits"].update(stop_fraction=5), "exits.stop_fraction"),
         (lambda r: r["exits"].update(take_profit_mult=0.5), "exits.take_profit_mult"),
         (lambda r: r["risk"].update(total_fraction="lots"), "risk.total_fraction"),
-        (lambda r: r["risk"].update(per_entry_fraction=0.2), "risk.per_entry_fraction"),  # > total
+        (lambda r: r["risk"].update(per_entry_fraction=0.03), "risk.per_entry_fraction"),  # > per_underlying
+        (lambda r: r["risk"].update(per_underlying_fraction=0.2), "risk.per_underlying_fraction"),  # > total
         (lambda r: r["signals"].update(macd_fast=30), "signals.macd_fast"),  # >= slow
         (lambda r: r["signals"].update(rsi_period=0), "signals.rsi_period"),
         (lambda r: r["screener"].update(strike_band_pct=0.9), "screener.strike_band_pct"),

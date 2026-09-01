@@ -203,9 +203,13 @@ def run_cycle(
     record["entry"] = None
     choice = _decide(tradeable, config, manual_mode, llm_transport) if tradeable else None
     if choice is not None:
+        underlying_risk = pos_and_risk.open_premium_at_risk(
+            [s for s in spreads if s.underlying == choice.symbol]
+        )
         record["entry"] = _attempt_entry(
             choice, features[choice.symbol].mid, config, trading, option_data,
-            account.equity, open_risk, account.open_order_symbols, cycle_id, execute,
+            account.equity, open_risk, underlying_risk,
+            account.open_order_symbols, cycle_id, execute,
         )
 
     submitted = [e for e in exits if e.get("receipt", {}).get("submitted")] or (
@@ -268,6 +272,7 @@ def _attempt_entry(
     option_data: object,
     equity: float | None,
     open_risk: float | None,
+    underlying_risk: float | None,
     pending_symbols: frozenset[str],
     cycle_id: str,
     execute: bool,
@@ -298,7 +303,9 @@ def _attempt_entry(
         "expiration": spread.expiration, "width": spread.width,
         "net_debit": spread.net_debit, "skew": round(spread.skew, 4),
     }
-    qty, reason = pos_and_risk.size_entry(spread.net_debit, equity, open_risk, cycle_spent=0.0)
+    qty, reason = pos_and_risk.size_entry(
+        spread.net_debit, equity, open_risk, underlying_risk, cycle_spent=0.0
+    )
     if reason is not None:
         entry["rejected"] = reason
         logger.info("entry refused by risk manager: {}", reason)
@@ -327,7 +334,9 @@ def _attempt_entry(
     if not (settings.MIN_NET_DEBIT <= fresh_debit < spread.width):
         entry["rejected"] = "recheck: bad_debit"
         return entry
-    qty, reason = pos_and_risk.size_entry(fresh_debit, fresh_account.equity, open_risk, cycle_spent=0.0)
+    qty, reason = pos_and_risk.size_entry(
+        fresh_debit, fresh_account.equity, open_risk, underlying_risk, cycle_spent=0.0
+    )
     if reason is not None:
         entry["rejected"] = f"recheck: {reason}"
         return entry
