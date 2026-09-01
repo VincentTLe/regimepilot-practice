@@ -417,3 +417,70 @@ def test_settle_plays_order_sound_only_on_successful_submit(monkeypatch):
 
     cli._settle(object(), plan, execute=False)
     assert played == [True]  # dry run never beeps
+
+
+# --- cancel command ---
+
+
+def _cancel_setup(monkeypatch, trading):
+    config = make_config()
+    monkeypatch.setattr(cli.broker, "load_config", lambda: config)
+    monkeypatch.setattr(cli.broker, "build_clients", lambda config: (trading, None, None))
+
+
+def _open_order(order_id, *legs):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        id=order_id, client_order_id=f"c-{order_id}", symbol=None,
+        legs=[SimpleNamespace(symbol=s) for s in legs],
+    )
+
+
+def test_cancel_all_open_orders_after_confirmation(monkeypatch):
+    trading = FakeTradingClient(orders=[_open_order("o1", LONG_OCC, SHORT_OCC), _open_order("o2", "X")])
+    _cancel_setup(monkeypatch, trading)
+    result = CliRunner().invoke(cli.app, ["cancel"], input="y\n")
+    assert result.exit_code == 0
+    assert trading.canceled == ["o1", "o2"]
+    assert "cancel requested: o1" in result.output
+
+
+def test_cancel_aborts_without_confirmation(monkeypatch):
+    trading = FakeTradingClient(orders=[_open_order("o1", LONG_OCC)])
+    _cancel_setup(monkeypatch, trading)
+    result = CliRunner().invoke(cli.app, ["cancel"], input="n\n")
+    assert result.exit_code != 0
+    assert trading.canceled == []
+
+
+def test_cancel_single_order_by_id(monkeypatch):
+    trading = FakeTradingClient(orders=[_open_order("o1", LONG_OCC), _open_order("o2", "X")])
+    _cancel_setup(monkeypatch, trading)
+    result = CliRunner().invoke(cli.app, ["cancel", "o2", "--yes"])
+    assert result.exit_code == 0
+    assert trading.canceled == ["o2"]
+
+
+def test_cancel_unknown_order_id_fails_without_canceling(monkeypatch):
+    trading = FakeTradingClient(orders=[_open_order("o1", LONG_OCC)])
+    _cancel_setup(monkeypatch, trading)
+    result = CliRunner().invoke(cli.app, ["cancel", "nope", "--yes"])
+    assert result.exit_code == 1
+    assert trading.canceled == []
+
+
+def test_cancel_reports_broker_refusal(monkeypatch):
+    trading = FakeTradingClient(orders=[_open_order("o1", LONG_OCC)], cancel_error=RuntimeError("boom"))
+    _cancel_setup(monkeypatch, trading)
+    result = CliRunner().invoke(cli.app, ["cancel", "--yes"])
+    assert result.exit_code == 1
+    assert "FAIL o1" in result.output
+
+
+def test_cancel_with_no_open_orders_is_a_noop(monkeypatch):
+    trading = FakeTradingClient()
+    _cancel_setup(monkeypatch, trading)
+    result = CliRunner().invoke(cli.app, ["cancel"])
+    assert result.exit_code == 0
+    assert "no open orders" in result.output

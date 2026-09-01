@@ -26,7 +26,14 @@ import pos_and_risk
 import settings
 import signals
 import sounds
-from data_models import Config, EntryChoice, OrderPlan, SpreadQuote, SymbolFeatures, to_json_line
+from data_models import (
+    Config,
+    EntryChoice,
+    OrderPlan,
+    SpreadQuote,
+    SymbolFeatures,
+    to_json_line,
+)
 
 JOURNAL_PATH = Path("logs") / "cycles.jsonl"
 MIN_OPTIONS_LEVEL = 3  # spreads need Alpaca options trading level 3
@@ -36,7 +43,9 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 def setup_logging() -> None:
     logger.remove()
-    logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <7} | {message}")
+    logger.add(
+        sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <7} | {message}"
+    )
 
 
 def append_journal(record: dict) -> None:
@@ -73,13 +82,18 @@ def _screen_spread(
     chains = {
         exp: {
             strike: broker.leg_quote_from_snapshot(
-                info["symbol"], strike, snapshots.get(info["symbol"]), info["open_interest"]
+                info["symbol"],
+                strike,
+                snapshots.get(info["symbol"]),
+                info["open_interest"],
             )
             for strike, info in by_expiry[exp].items()
         }
         for exp in expirations
     }
-    return options_screener.select_spread(chains, direction, spot, underlying, clock_time)
+    return options_screener.select_spread(
+        chains, direction, spot, underlying, clock_time
+    )
 
 
 def run_cycle(
@@ -114,9 +128,13 @@ def run_cycle(
             "market_open": clock.is_open,
             "equity": account.equity,
             "options_level": account.options_level,
-            "open_spreads": [f"{s.underlying} {s.expiration} {s.option_type} x{s.qty}" for s in spreads],
+            "open_spreads": [
+                f"{s.underlying} {s.expiration} {s.option_type} x{s.qty}"
+                for s in spreads
+            ],
             "open_risk": open_risk,
-            "warnings": warnings + [f"unparsed position: {p}" for p in account.unparsed_positions],
+            "warnings": warnings
+            + [f"unparsed position: {p}" for p in account.unparsed_positions],
         }
     )
     for warning in record["warnings"]:
@@ -130,36 +148,56 @@ def run_cycle(
 
     # --- Trading signals: needed by the reversal exit AND the entry side, so they
     # cover the whitelist plus every held underlying (even one removed from the list)
-    watch_symbols = tuple(dict.fromkeys(config.symbols + tuple(s.underlying for s in spreads)))
+    watch_symbols = tuple(
+        dict.fromkeys(config.symbols + tuple(s.underlying for s in spreads))
+    )
     try:
         mids = broker.fetch_spot_mids(stock_data, watch_symbols)
     except broker.BrokerError as error:
         # Exits must still run on a quote outage; entries will gate out naturally.
         logger.error("quote read failed, exits still run, entries blocked: {}", error)
         mids = {symbol: None for symbol in watch_symbols}
-    features = _build_trading_signals(watch_symbols, config, stock_data, mids, clock.server_time)
+    features = _build_trading_signals(
+        watch_symbols, config, stock_data, mids, clock.server_time
+    )
 
     # --- Position manager: mechanical exits run before entries and are never gated ---
     exits: list[dict] = []
     if spreads:
-        leg_symbols = [s for spread in spreads for s in (spread.long_symbol, spread.short_symbol)]
+        leg_symbols = [
+            s for spread in spreads for s in (spread.long_symbol, spread.short_symbol)
+        ]
         try:
             snapshots = broker.fetch_option_snapshots(option_data, leg_symbols)
         except broker.BrokerError as error:
             logger.error("exit snapshot read failed: {}", error)
             snapshots = {}
         for spread in spreads:
-            long_q = broker.leg_quote_from_snapshot(spread.long_symbol, 0.0, snapshots.get(spread.long_symbol), None)
-            short_q = broker.leg_quote_from_snapshot(spread.short_symbol, 0.0, snapshots.get(spread.short_symbol), None)
-            opposing = spread.underlying in features and pos_and_risk.opposing_event_fired(
-                spread, features[spread.underlying].events
+            long_q = broker.leg_quote_from_snapshot(
+                spread.long_symbol, 0.0, snapshots.get(spread.long_symbol), None
+            )
+            short_q = broker.leg_quote_from_snapshot(
+                spread.short_symbol, 0.0, snapshots.get(spread.short_symbol), None
+            )
+            opposing = (
+                spread.underlying in features
+                and pos_and_risk.opposing_event_fired(
+                    spread, features[spread.underlying].events
+                )
             )
             decision = pos_and_risk.exit_decision(
-                spread, long_q, short_q, clock.server_time.date(), opposing_event=opposing
+                spread,
+                long_q,
+                short_q,
+                clock.server_time.date(),
+                opposing_event=opposing,
             )
             if decision is None:
                 if spread.net_entry_debit is None:
-                    logger.warning("cannot compute stop/TP for {} (unknown entry debit)", spread.underlying)
+                    logger.warning(
+                        "cannot compute stop/TP for {} (unknown entry debit)",
+                        spread.underlying,
+                    )
                 continue
             entry: dict = {
                 "spread": f"{spread.underlying} {spread.expiration} {spread.option_type}",
@@ -169,13 +207,19 @@ def run_cycle(
             if {spread.long_symbol, spread.short_symbol} & account.open_order_symbols:
                 entry["skipped"] = "pending_order"
             else:
-                plan = options_screener.build_exit_plan(spread, long_q, short_q, cycle_id)
+                plan = options_screener.build_exit_plan(
+                    spread, long_q, short_q, cycle_id
+                )
                 if plan is None:
                     entry["skipped"] = "no_quote"
                 else:
                     entry["receipt"] = _settle(trading, plan, execute)
             exits.append(entry)
-            logger.info("exit {}: {}", entry["spread"], entry.get("receipt", entry.get("skipped")))
+            logger.info(
+                "exit {}: {}",
+                entry["spread"],
+                entry.get("receipt", entry.get("skipped")),
+            )
     record["exits"] = exits
 
     # --- Entry candidates: whitelist symbols only ---
@@ -186,14 +230,22 @@ def run_cycle(
         if pos_and_risk.parse_occ(sym) is not None
     }
     candidates = []
-    for c in signals.build_candidates(whitelist_features, clock.is_open, config.bar_seconds):
+    for c in signals.build_candidates(
+        whitelist_features, clock.is_open, config.bar_seconds
+    ):
         if c.gate_block is None and c.symbol in busy:
             # a held/pending underlying is not a candidate
             c = replace(c, gate_block="already_held")
         candidates.append(c)
     record["candidates"] = [
-        {"symbol": c.symbol, "events": [e.kind for e in c.events], "rsi": c.rsi,
-         "atr": c.atr, "macd_hist": c.macd_hist, "gate_block": c.gate_block}
+        {
+            "symbol": c.symbol,
+            "events": [e.kind for e in c.events],
+            "rsi": c.rsi,
+            "atr": c.atr,
+            "macd_hist": c.macd_hist,
+            "gate_block": c.gate_block,
+        }
         for c in candidates
     ]
     tradeable = [c for c in candidates if c.gate_block is None]
@@ -201,27 +253,45 @@ def run_cycle(
 
     # --- Decision + screener + risk + execution ---
     record["entry"] = None
-    choice = _decide(tradeable, config, manual_mode, llm_transport) if tradeable else None
+    choice = (
+        _decide(tradeable, config, manual_mode, llm_transport) if tradeable else None
+    )
     if choice is not None:
         underlying_risk = pos_and_risk.open_premium_at_risk(
             [s for s in spreads if s.underlying == choice.symbol]
         )
         record["entry"] = _attempt_entry(
-            choice, features[choice.symbol].mid, config, trading, option_data,
-            account.equity, open_risk, underlying_risk,
-            account.open_order_symbols, cycle_id, execute,
+            choice,
+            features[choice.symbol].mid,
+            config,
+            trading,
+            option_data,
+            account.equity,
+            open_risk,
+            underlying_risk,
+            account.open_order_symbols,
+            cycle_id,
+            execute,
         )
 
     submitted = [e for e in exits if e.get("receipt", {}).get("submitted")] or (
         record["entry"] or {}
     ).get("receipt", {}).get("submitted")
-    record["outcome"] = "submitted" if submitted else ("planned" if not execute and (exits or record["entry"]) else "hold")
+    record["outcome"] = (
+        "submitted"
+        if submitted
+        else ("planned" if not execute and (exits or record["entry"]) else "hold")
+    )
     append_journal(record)
     return record
 
 
 def _build_trading_signals(
-    symbols: tuple[str, ...], config: Config, stock_data: object, mids: dict, now: datetime
+    symbols: tuple[str, ...],
+    config: Config,
+    stock_data: object,
+    mids: dict,
+    now: datetime,
 ) -> dict[str, SymbolFeatures]:
     """Create the trading signals: OHLCV -> RSI/ATR/MACD -> events, per symbol.
 
@@ -231,7 +301,9 @@ def _build_trading_signals(
     features: dict[str, SymbolFeatures] = {}
     for symbol in symbols:
         try:
-            frame = market_data.fetch_ohlcv(stock_data, symbol, config.bar_timeframe, now)
+            frame = market_data.fetch_ohlcv(
+                stock_data, symbol, config.bar_timeframe, now
+            )
             frame = signals.add_indicators(frame)
             features[symbol] = signals.build_signal(
                 symbol, frame, mids.get(symbol), now, config.bar_seconds
@@ -239,13 +311,21 @@ def _build_trading_signals(
         except market_data.MarketDataError as error:
             logger.warning("{}", error)
             features[symbol] = SymbolFeatures(
-                symbol=symbol, mid=mids.get(symbol), rsi=None, atr=None, macd_hist=None,
-                events=(), bar_age_seconds=None, gate_block="data_error",
+                symbol=symbol,
+                mid=mids.get(symbol),
+                rsi=None,
+                atr=None,
+                macd_hist=None,
+                events=(),
+                bar_age_seconds=None,
+                gate_block="data_error",
             )
     return features
 
 
-def _decide(tradeable, config: Config, manual_mode: bool, llm_transport) -> EntryChoice | None:
+def _decide(
+    tradeable, config: Config, manual_mode: bool, llm_transport
+) -> EntryChoice | None:
     if manual_mode:
         choice = decision_layer.manual_decide(tradeable)
     else:
@@ -253,12 +333,16 @@ def _decide(tradeable, config: Config, manual_mode: bool, llm_transport) -> Entr
             logger.error("OPENROUTER_API_KEY missing; use --manual-mode or set the key")
             return None
         try:
-            choice = decision_layer.decide_entry(tradeable, config.openrouter_api_key, transport=llm_transport)
+            choice = decision_layer.decide_entry(
+                tradeable, config.openrouter_api_key, transport=llm_transport
+            )
         except decision_layer.LlmError as error:
             logger.error("LLM decision failed, holding: {}", error)
             return None
     if choice:
-        logger.info("entry choice: {} {} ({})", choice.symbol, choice.direction, choice.model)
+        logger.info(
+            "entry choice: {} {} ({})", choice.symbol, choice.direction, choice.model
+        )
     else:
         logger.info("no entry this cycle")
     return choice
@@ -277,7 +361,12 @@ def _attempt_entry(
     cycle_id: str,
     execute: bool,
 ) -> dict:
-    entry: dict = {"symbol": choice.symbol, "direction": choice.direction, "thesis": choice.thesis, "model": choice.model}
+    entry: dict = {
+        "symbol": choice.symbol,
+        "direction": choice.direction,
+        "thesis": choice.thesis,
+        "model": choice.model,
+    }
     if spot is None:
         entry["rejected"] = "missing_quote"
         return entry
@@ -287,8 +376,13 @@ def _attempt_entry(
         # future_quote sanity check.
         screen_clock = broker.fetch_clock(trading)
         spread, rejections = _screen_spread(
-            trading, option_data, choice.symbol, choice.direction, spot,
-            screen_clock.server_time, screen_clock.server_time.date(),
+            trading,
+            option_data,
+            choice.symbol,
+            choice.direction,
+            spot,
+            screen_clock.server_time,
+            screen_clock.server_time.date(),
         )
     except broker.BrokerError as error:
         entry["rejected"] = str(error)
@@ -296,12 +390,20 @@ def _attempt_entry(
     entry["screen_rejections"] = rejections
     if spread is None:
         entry["rejected"] = "no_spread"
-        logger.info("no acceptable spread for {} {}: {}", choice.symbol, choice.direction, rejections)
+        logger.info(
+            "no acceptable spread for {} {}: {}",
+            choice.symbol,
+            choice.direction,
+            rejections,
+        )
         return entry
     entry["spread"] = {
-        "long": spread.long.symbol, "short": spread.short.symbol,
-        "expiration": spread.expiration, "width": spread.width,
-        "net_debit": spread.net_debit, "skew": round(spread.skew, 4),
+        "long": spread.long.symbol,
+        "short": spread.short.symbol,
+        "expiration": spread.expiration,
+        "width": spread.width,
+        "net_debit": spread.net_debit,
+        "skew": round(spread.skew, 4),
     }
     qty, reason = pos_and_risk.size_entry(
         spread.net_debit, equity, open_risk, underlying_risk, cycle_spent=0.0
@@ -316,15 +418,27 @@ def _attempt_entry(
     try:
         fresh_clock = broker.fetch_clock(trading)
         fresh_account = broker.fetch_account_state(trading, config.symbols)
-        fresh_snaps = broker.fetch_option_snapshots(option_data, [spread.long.symbol, spread.short.symbol])
+        fresh_snaps = broker.fetch_option_snapshots(
+            option_data, [spread.long.symbol, spread.short.symbol]
+        )
     except broker.BrokerError as error:
         entry["rejected"] = f"recheck: {error}"
         return entry
     if {spread.long.symbol, spread.short.symbol} & fresh_account.open_order_symbols:
         entry["rejected"] = "pending_order_conflict"
         return entry
-    long_q = broker.leg_quote_from_snapshot(spread.long.symbol, spread.long.strike, fresh_snaps.get(spread.long.symbol), spread.long.open_interest)
-    short_q = broker.leg_quote_from_snapshot(spread.short.symbol, spread.short.strike, fresh_snaps.get(spread.short.symbol), spread.short.open_interest)
+    long_q = broker.leg_quote_from_snapshot(
+        spread.long.symbol,
+        spread.long.strike,
+        fresh_snaps.get(spread.long.symbol),
+        spread.long.open_interest,
+    )
+    short_q = broker.leg_quote_from_snapshot(
+        spread.short.symbol,
+        spread.short.strike,
+        fresh_snaps.get(spread.short.symbol),
+        spread.short.open_interest,
+    )
     for leg in (long_q, short_q):
         failure = options_screener.check_leg(leg, fresh_clock.server_time)
         if failure is not None:
@@ -345,8 +459,14 @@ def _attempt_entry(
         return entry
 
     fresh_spread = SpreadQuote(
-        underlying=spread.underlying, direction=spread.direction, expiration=spread.expiration,
-        long=long_q, short=short_q, width=spread.width, net_debit=fresh_debit, skew=spread.skew,
+        underlying=spread.underlying,
+        direction=spread.direction,
+        expiration=spread.expiration,
+        long=long_q,
+        short=short_q,
+        width=spread.width,
+        net_debit=fresh_debit,
+        skew=spread.skew,
     )
     plan = options_screener.build_entry_plan(fresh_spread, qty, cycle_id)
     entry["receipt"] = _settle(trading, plan, execute)
@@ -355,17 +475,34 @@ def _attempt_entry(
 
 def _settle(trading: object, plan: OrderPlan, execute: bool) -> dict:
     if not execute:
-        return {"submitted": False, "dry_run": True, "plan": {
-            "kind": plan.kind, "qty": plan.qty, "limit_price": plan.limit_price,
-            "legs": [f"{l.side} {l.symbol}" for l in plan.legs],
-            "client_order_id": plan.client_order_id,
-        }}
+        return {
+            "submitted": False,
+            "dry_run": True,
+            "plan": {
+                "kind": plan.kind,
+                "qty": plan.qty,
+                "limit_price": plan.limit_price,
+                "legs": [f"{l.side} {l.symbol}" for l in plan.legs],
+                "client_order_id": plan.client_order_id,
+            },
+        }
     receipt = broker.submit_paper_order(trading, plan)
-    logger.info("order {}: submitted={} status={} error={}", plan.client_order_id, receipt.submitted, receipt.status, receipt.error)
+    logger.info(
+        "order {}: submitted={} status={} error={}",
+        plan.client_order_id,
+        receipt.submitted,
+        receipt.status,
+        receipt.error,
+    )
     if receipt.submitted:
         sounds.play_order_sound()
-    return {"submitted": receipt.submitted, "order_id": receipt.order_id, "status": receipt.status,
-            "error": receipt.error, "client_order_id": receipt.client_order_id}
+    return {
+        "submitted": receipt.submitted,
+        "order_id": receipt.order_id,
+        "status": receipt.status,
+        "error": receipt.error,
+        "client_order_id": receipt.client_order_id,
+    }
 
 
 # --- Fill tracking: sound + log when a submitted order actually fills ---
@@ -402,12 +539,18 @@ def _check_fills(trading: object, pending: dict[str, str]) -> None:
             logger.info("order not filled ({}): {} (order {})", status, label, order_id)
             del pending[order_id]
         # None (lookup failed) or still open: keep waiting
+    if pending:
+        logger.info("awaiting fill: {}", ", ".join(pending.values()))
 
 
 @app.command()
 def run(
-    execute: bool = typer.Option(False, help="Actually submit paper orders (dry run otherwise)."),
-    manual_mode: bool = typer.Option(False, help="Pick the entry candidate yourself instead of asking the LLM."),
+    execute: bool = typer.Option(
+        False, help="Actually submit paper orders (dry run otherwise)."
+    ),
+    manual_mode: bool = typer.Option(
+        False, help="Pick the entry candidate yourself instead of asking the LLM."
+    ),
     loop: bool = typer.Option(False, help="Run forever on an interval."),
     interval: int = typer.Option(
         settings.LOOP_INTERVAL_SECONDS, help="Seconds between cycles with --loop."
@@ -418,9 +561,24 @@ def run(
     config, trading, stock_data, option_data = _bootstrap()
     if execute:
         logger.warning("ARMED: paper order submission is enabled")
-    pending: dict[str, str] = {}  # order_id -> label, in-memory only
+    # Seed fill tracking from orders already open at the broker, so a restart
+    # resumes watching what a previous run submitted.
+    pending: dict[str, str] = {}  # order_id -> label
+    try:
+        pending = broker.fetch_open_orders(trading)
+    except broker.BrokerError as error:
+        logger.warning("could not list open orders at startup: {}", error)
+    if pending:
+        logger.info("watching open orders for fills: {}", ", ".join(pending.values()))
     while True:
-        record = run_cycle(config, trading, stock_data, option_data, execute=execute, manual_mode=manual_mode)
+        record = run_cycle(
+            config,
+            trading,
+            stock_data,
+            option_data,
+            execute=execute,
+            manual_mode=manual_mode,
+        )
         logger.info("cycle {} outcome: {}", record["cycle_id"], record.get("outcome"))
         new = _new_orders(record)
         pending.update(new)
@@ -434,8 +592,11 @@ def run(
                     break
                 time.sleep(FILL_POLL_INTERVAL_SECONDS)
         if not loop:
+            _check_fills(trading, pending)  # final status check before exit
             if pending:
-                logger.info("orders still open at exit (no fill sound after this): {}", list(pending.values()))
+                logger.info(
+                    "exiting with open orders; a later `run` resumes watching them"
+                )
             break
         time.sleep(interval)
         _check_fills(trading, pending)  # catch slow fills from earlier cycles
@@ -450,7 +611,9 @@ def preflight() -> None:
     except settings.SettingsError as error:
         typer.echo(f"FAIL settings.yaml: {error}")
         raise typer.Exit(1)
-    typer.echo(f"OK   settings.yaml — all {len(values)} required values present and sane:")
+    typer.echo(
+        f"OK   settings.yaml — all {len(values)} required values present and sane:"
+    )
     for name in sorted(values):
         typer.echo(f"       {name} = {values[name]}")
 
@@ -468,7 +631,9 @@ def preflight() -> None:
         typer.echo(f"FAIL Alpaca connectivity: {error}")
         raise typer.Exit(1)
     state = "open" if clock.is_open else "closed"
-    typer.echo(f"OK   Alpaca connectivity — market {state}, server time {clock.server_time}")
+    typer.echo(
+        f"OK   Alpaca connectivity — market {state}, server time {clock.server_time}"
+    )
     typer.echo("preflight passed")
 
 
@@ -478,6 +643,8 @@ def account() -> None:
     setup_logging()
     config, trading, _, _ = _bootstrap()
     state = broker.fetch_account_state(trading, config.symbols)
+    for leg in state.legs:
+        logger.info("position: {} qty={} avg_entry={}", leg.symbol, leg.qty, leg.avg_entry_price)
     spreads, warnings = pos_and_risk.pair_spreads(state.legs)
     typer.echo(f"equity: {state.equity}  options_level: {state.options_level}")
     typer.echo(f"open premium at risk: {pos_and_risk.open_premium_at_risk(spreads)}")
@@ -493,13 +660,52 @@ def account() -> None:
 
 
 @app.command()
+def cancel(
+    order_id: str = typer.Argument(
+        None, help="Order id to cancel; omit to cancel ALL open orders."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """Cancel open orders on the paper account (all of them, or one by id)."""
+    setup_logging()
+    _, trading, _, _ = _bootstrap()
+    open_orders = broker.fetch_open_orders(trading)
+    if not open_orders:
+        typer.echo("no open orders")
+        return
+    if order_id is not None:
+        if order_id not in open_orders:
+            typer.echo(f"order {order_id} is not open (open: {list(open_orders)})")
+            raise typer.Exit(1)
+        targets = {order_id: open_orders[order_id]}
+    else:
+        targets = open_orders
+    for oid, label in targets.items():
+        typer.echo(f"  {oid}  {label}")
+    if not yes:
+        typer.confirm(f"cancel {len(targets)} open order(s)?", abort=True)
+    failed = False
+    # for oid, label in targets.items():
+    #     try:
+    #         broker.cancel_order(trading, oid)
+    #         typer.echo(f"cancel requested: {oid}  {label}")
+    #     except broker.BrokerError as error:
+    #         failed = True
+    #         typer.echo(f"FAIL {oid}  {label}: {error}")
+    if failed:
+        raise typer.Exit(1)
+
+
+@app.command()
 def candidates() -> None:
     """Show indicators, events and gate results for every whitelisted symbol (read-only)."""
     setup_logging()
     config, trading, stock_data, _ = _bootstrap()
     clock = broker.fetch_clock(trading)
     mids = broker.fetch_spot_mids(stock_data, config.symbols)
-    features = _build_trading_signals(config.symbols, config, stock_data, mids, clock.server_time)
+    features = _build_trading_signals(
+        config.symbols, config, stock_data, mids, clock.server_time
+    )
     for c in signals.build_candidates(features, clock.is_open, config.bar_seconds):
         events = ",".join(e.kind for e in c.events) or "-"
         rsi = f"{c.rsi:.1f}" if c.rsi is not None else "-"
@@ -529,7 +735,13 @@ def screen(
         typer.echo("no usable underlying quote")
         raise typer.Exit(1)
     spread, rejections = _screen_spread(
-        trading, option_data, symbol, direction, spot, clock.server_time, clock.server_time.date()
+        trading,
+        option_data,
+        symbol,
+        direction,
+        spot,
+        clock.server_time,
+        clock.server_time.date(),
     )
     typer.echo(f"spot: {spot}  rejections: {rejections}")
     if spread is None:

@@ -37,9 +37,11 @@ def pair_spreads(
 ) -> tuple[list[OpenSpread], list[str]]:
     """Group option legs into debit verticals; anything unrecognized is a warning.
 
-    A spread is exactly one long and one short leg with equal absolute quantity on
-    the same underlying, expiration and type. Unpaired legs are reported and never
-    touched by this agent.
+    A spread is one long and one short leg with equal absolute quantity on the
+    same underlying, expiration and type, with the short on the debit side
+    (calls: above the long strike; puts: below). A group may hold several such
+    spreads: each long is matched to the nearest unused short of equal quantity.
+    Leftover legs are reported and never touched by this agent.
     """
     groups: dict[tuple[str, date, str], list[LegPosition]] = {}
     for leg in legs:
@@ -48,30 +50,51 @@ def pair_spreads(
     spreads: list[OpenSpread] = []
     warnings: list[str] = []
     for (underlying, expiration, option_type), members in sorted(groups.items()):
-        longs = [leg for leg in members if leg.qty > 0]
-        shorts = [leg for leg in members if leg.qty < 0]
-        if len(longs) != 1 or len(shorts) != 1 or longs[0].qty != -shorts[0].qty:
+        # For calls the debit side is up (short strike > long strike), for puts down.
+        upward = option_type == "C"
+        longs = sorted(
+            (leg for leg in members if leg.qty > 0),
+            key=lambda leg: leg.strike, reverse=not upward,
+        )
+        free_shorts = sorted(
+            (leg for leg in members if leg.qty < 0),
+            key=lambda leg: leg.strike, reverse=not upward,
+        )
+        leftovers: list[LegPosition] = [leg for leg in members if leg.qty == 0]
+        for long_leg in longs:
+            short_leg = next(
+                (
+                    s for s in free_shorts
+                    if -s.qty == long_leg.qty
+                    and (s.strike > long_leg.strike if upward else s.strike < long_leg.strike)
+                ),
+                None,
+            )
+            if short_leg is None:
+                leftovers.append(long_leg)
+                continue
+            free_shorts.remove(short_leg)
+            net_entry_debit = None
+            if long_leg.avg_entry_price is not None and short_leg.avg_entry_price is not None:
+                debit = long_leg.avg_entry_price - short_leg.avg_entry_price
+                net_entry_debit = debit if debit > 0 else None  # non-debit pair: unknown
+            spreads.append(
+                OpenSpread(
+                    underlying=underlying,
+                    expiration=expiration,
+                    option_type=option_type,
+                    long_symbol=long_leg.symbol,
+                    short_symbol=short_leg.symbol,
+                    qty=long_leg.qty,
+                    net_entry_debit=net_entry_debit,
+                )
+            )
+        leftovers.extend(free_shorts)
+        if leftovers:
             warnings.append(
                 f"unpaired legs on {underlying} {expiration} {option_type}: "
-                + ", ".join(f"{leg.symbol} qty={leg.qty}" for leg in members)
+                + ", ".join(f"{leg.symbol} qty={leg.qty}" for leg in leftovers)
             )
-            continue
-        long_leg, short_leg = longs[0], shorts[0]
-        net_entry_debit = None
-        if long_leg.avg_entry_price is not None and short_leg.avg_entry_price is not None:
-            debit = long_leg.avg_entry_price - short_leg.avg_entry_price
-            net_entry_debit = debit if debit > 0 else None  # non-debit pair: unknown
-        spreads.append(
-            OpenSpread(
-                underlying=underlying,
-                expiration=expiration,
-                option_type=option_type,
-                long_symbol=long_leg.symbol,
-                short_symbol=short_leg.symbol,
-                qty=long_leg.qty,
-                net_entry_debit=net_entry_debit,
-            )
-        )
     return spreads, warnings
 
 

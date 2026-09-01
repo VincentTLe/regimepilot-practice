@@ -183,3 +183,33 @@ def test_fetch_order_status_unwraps_enum_value():
 def test_fetch_order_status_returns_none_on_lookup_failure():
     trading = FakeTradingClient()  # no known orders: get_order_by_id raises
     assert broker.fetch_order_status(trading, "missing") is None
+
+
+def test_fetch_open_orders_labels_by_leg_symbols():
+    mleg = SimpleNamespace(
+        id="o1", client_order_id="c1", symbol=None,
+        legs=[SimpleNamespace(symbol="SPY260911C00655000"), SimpleNamespace(symbol="SPY260911C00675000")],
+    )
+    bare = SimpleNamespace(id="o2", client_order_id="c2", symbol=None, legs=None)
+    trading = FakeTradingClient(orders=[mleg, bare])
+    assert broker.fetch_open_orders(trading) == {
+        "o1": "SPY260911C00655000/SPY260911C00675000",
+        "o2": "c2",  # no symbols anywhere: fall back to the client order id
+    }
+    assert broker.fetch_open_orders(FakeTradingClient()) == {}
+
+
+def test_account_state_sees_sdk_enum_positions():
+    """Regression: str(AssetClass.US_OPTION) is "AssetClass.US_OPTION", which the
+    old lowercase substring filter never matched — every position was dropped."""
+    from alpaca.trading.enums import AssetClass, PositionSide
+
+    positions = [
+        fake_position("SPY260911C00650000", 2, 6.0, side="long"),
+        fake_position("SPY260911C00655000", 2, 4.0, side="short"),
+    ]
+    assert positions[0].asset_class is AssetClass.US_OPTION  # the real enum, not a str
+    assert positions[1].side is PositionSide.SHORT
+    state = broker.fetch_account_state(FakeTradingClient(positions=positions), ("SPY",))
+    assert [leg.qty for leg in state.legs] == [2, -2]  # seen, and shorts negative
+    assert state.unparsed_positions == ()

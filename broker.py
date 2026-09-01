@@ -153,13 +153,17 @@ def fetch_account_state(trading: Any, whitelist: tuple[str, ...]) -> AccountStat
     legs: list[LegPosition] = []
     unparsed: list[str] = []
     for position in raw_positions:
-        asset_class = str(getattr(position, "asset_class", "") or "")
+        # The SDK returns enums (AssetClass.US_OPTION, PositionSide.SHORT) whose
+        # str() is "AssetClass.US_OPTION" — match on the lowercase value instead.
+        raw_class = getattr(position, "asset_class", None)
+        asset_class = str(getattr(raw_class, "value", raw_class) or "").lower()
         if "option" not in asset_class:
             continue  # equities and anything else are out of scope
         symbol = str(position.symbol)
         parsed = pos_and_risk.parse_occ(symbol)
         qty = as_int(getattr(position, "qty", None))
-        side = str(getattr(position, "side", "") or "")
+        raw_side = getattr(position, "side", None)
+        side = str(getattr(raw_side, "value", raw_side) or "").lower()
         if parsed is None or qty is None or qty == 0:
             unparsed.append(symbol)
             continue
@@ -191,6 +195,37 @@ def fetch_account_state(trading: Any, whitelist: tuple[str, ...]) -> AccountStat
         unparsed_positions=tuple(unparsed),
         open_order_symbols=frozenset(order_symbols),
     )
+
+
+def fetch_open_orders(trading: Any) -> dict[str, str]:
+    """Open order ids with a readable label (leg symbols), for fill tracking.
+
+    Lets a restarted `run` resume watching orders submitted by a previous run.
+    """
+    request = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500, nested=True)
+    raw_orders = guarded("orders read", lambda: trading.get_orders(request))
+    orders: dict[str, str] = {}
+    for order in raw_orders:
+        order_id = getattr(order, "id", None)
+        if not order_id:
+            continue
+        symbols = [
+            str(symbol)
+            for item in [order, *(getattr(order, "legs", None) or [])]
+            if (symbol := getattr(item, "symbol", None))
+        ]
+        label = "/".join(symbols) or str(getattr(order, "client_order_id", None) or "unknown")
+        orders[str(order_id)] = label
+    return orders
+
+
+def cancel_order(trading: Any, order_id: str) -> None:
+    """Request cancellation of one open order. Raises BrokerError on refusal.
+
+    Alpaca cancels asynchronously: success here means the request was accepted,
+    not that the order is already canceled (it may even still fill).
+    """
+    guarded("order cancel", lambda: trading.cancel_order_by_id(order_id))
 
 
 def fetch_spot_mids(stock_data: Any, symbols: tuple[str, ...]) -> dict[str, float | None]:
@@ -324,11 +359,12 @@ def submit_paper_order(trading: Any, plan: OrderPlan) -> OrderReceipt:
             client_order_id=plan.client_order_id,
             error=type(error).__name__,
         )
+    status = getattr(order, "status", None)
     return OrderReceipt(
         submitted=True,
         client_order_id=plan.client_order_id,
         order_id=str(getattr(order, "id", None)),
-        status=str(getattr(order, "status", None)),
+        status=str(getattr(status, "value", status)),
     )
 
 

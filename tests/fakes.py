@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from alpaca.trading.enums import AssetClass, PositionSide
+
 NOW = datetime(2026, 8, 31, 15, 0, tzinfo=timezone.utc)
 TODAY = NOW.date()
 
@@ -20,12 +22,14 @@ def fake_account(equity: float | None = 100_000.0, level: int = 3) -> SimpleName
 
 
 def fake_position(symbol: str, qty: int, avg_entry_price: float, side: str = "long") -> SimpleNamespace:
+    # Real SDK enums, matching what the live client returns: str() of them is
+    # "AssetClass.US_OPTION" / "PositionSide.SHORT", which once hid all positions.
     return SimpleNamespace(
         symbol=symbol,
         qty=str(abs(qty)),
-        side=side,
+        side=PositionSide.SHORT if "short" in side else PositionSide.LONG,
         avg_entry_price=str(avg_entry_price),
-        asset_class="us_option",
+        asset_class=AssetClass.US_OPTION,
     )
 
 
@@ -61,6 +65,7 @@ class FakeTradingClient:
         contracts=(),
         submit_error: Exception | None = None,
         order_statuses: dict | None = None,
+        cancel_error: Exception | None = None,
     ):
         self.account = account or fake_account()
         self.clock = clock or fake_clock()
@@ -70,6 +75,8 @@ class FakeTradingClient:
         self.submit_error = submit_error
         self.submitted: list = []
         self.order_statuses = dict(order_statuses or {})
+        self.cancel_error = cancel_error
+        self.canceled: list = []
 
     def get_clock(self):
         return self.clock
@@ -96,6 +103,11 @@ class FakeTradingClient:
         if order_id not in self.order_statuses:
             raise KeyError(order_id)
         return SimpleNamespace(id=order_id, status=self.order_statuses[order_id])
+
+    def cancel_order_by_id(self, order_id):
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        self.canceled.append(order_id)
 
 
 def fake_bar(stamp: datetime, open_: float, high: float, low: float, close: float,

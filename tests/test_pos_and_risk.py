@@ -82,6 +82,66 @@ def test_pair_spreads_non_debit_pair_has_unknown_debit():
     assert spreads[0].net_entry_debit is None
 
 
+def test_pair_spreads_two_spreads_same_group_matched_by_qty():
+    # Regression: the real AMZN book — two call spreads sharing expiry, x5 and x7
+    legs = (
+        leg("AMZN260911C00260000", underlying="AMZN", qty=5, price=2.77, strike=260.0),
+        leg("AMZN260911C00262500", underlying="AMZN", qty=7, price=1.93, strike=262.5),
+        leg("AMZN260911C00267500", underlying="AMZN", qty=-5, price=0.95, strike=267.5),
+        leg("AMZN260911C00270000", underlying="AMZN", qty=-7, price=0.63, strike=270.0),
+    )
+    spreads, warnings = pos_and_risk.pair_spreads(legs)
+    assert warnings == []
+    by_qty = {s.qty: s for s in spreads}
+    assert set(by_qty) == {5, 7}
+    assert by_qty[5].long_symbol.endswith("00260000") and by_qty[5].short_symbol.endswith("00267500")
+    assert by_qty[7].long_symbol.endswith("00262500") and by_qty[7].short_symbol.endswith("00270000")
+    assert by_qty[5].net_entry_debit == pytest.approx(1.82)
+    assert by_qty[7].net_entry_debit == pytest.approx(1.30)
+
+
+def test_pair_spreads_equal_qty_spreads_decompose_by_nearest_strike():
+    legs = (
+        leg("SPY260911C00650000", qty=2, price=6.0, strike=650.0),
+        leg("SPY260911C00660000", qty=2, price=4.0, strike=660.0),
+        leg("SPY260911C00655000", qty=-2, price=5.0, strike=655.0),
+        leg("SPY260911C00670000", qty=-2, price=2.0, strike=670.0),
+    )
+    spreads, warnings = pos_and_risk.pair_spreads(legs)
+    assert warnings == []
+    pairs = {(s.long_symbol[-8:], s.short_symbol[-8:]) for s in spreads}
+    assert pairs == {("00650000", "00655000"), ("00660000", "00670000")}
+
+
+def test_pair_spreads_put_vertical_short_must_be_below_long():
+    good = (
+        leg("SPY260911P00650000", qty=1, price=6.0, strike=650.0, option_type="P"),
+        leg("SPY260911P00640000", qty=-1, price=4.0, strike=640.0, option_type="P"),
+    )
+    spreads, warnings = pos_and_risk.pair_spreads(good)
+    assert warnings == [] and len(spreads) == 1
+    assert spreads[0].net_entry_debit == pytest.approx(2.0)
+    wrong_side = (
+        leg("SPY260911P00650000", qty=1, price=6.0, strike=650.0, option_type="P"),
+        leg("SPY260911P00660000", qty=-1, price=8.0, strike=660.0, option_type="P"),
+    )
+    spreads, warnings = pos_and_risk.pair_spreads(wrong_side)
+    assert spreads == [] and len(warnings) == 1
+
+
+def test_pair_spreads_reports_only_the_leftover_legs():
+    legs = (
+        leg("SPY260911C00650000", qty=2, price=6.0, strike=650.0),
+        leg("SPY260911C00655000", qty=-2, price=3.5, strike=655.0),
+        leg("SPY260911C00660000", qty=1, price=2.0, strike=660.0),  # naked extra long
+    )
+    spreads, warnings = pos_and_risk.pair_spreads(legs)
+    assert len(spreads) == 1 and spreads[0].qty == 2
+    assert len(warnings) == 1
+    assert "SPY260911C00660000" in warnings[0]
+    assert "SPY260911C00650000" not in warnings[0]
+
+
 # --- mechanical exits ---
 
 def spread(debit=2.0, expiration=EXP):
