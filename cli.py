@@ -44,7 +44,9 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 def setup_logging() -> None:
     logger.remove()
     logger.add(
-        sys.stderr, level="INFO", format="{time:HH:mm:ss} | {level: <7} | {message}"
+        sys.stderr,
+        level="INFO",
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | <level>{message}</level>",
     )
 
 
