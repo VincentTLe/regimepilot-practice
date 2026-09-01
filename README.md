@@ -108,13 +108,13 @@ cp .env.example .env   # then paste your PAPER keys into .env
 ```bash
 uv run pytest                                   # no credentials, no network
 
-uv run --env-file .env python cli.py account                          # account state (read-only)
-uv run --env-file .env python cli.py candidates                       # scored whitelist (read-only)
-uv run --env-file .env python cli.py screen SPY --direction CALL      # what spread would be picked
+uv run --env-file .env cli.py account                          # account state (read-only)
+uv run --env-file .env cli.py candidates                       # scored whitelist (read-only)
+uv run --env-file .env cli.py screen SPY --direction CALL      # what spread would be picked
 
-uv run --env-file .env python cli.py run --manual-mode                # one cycle, dry run, you pick the entry
-uv run --env-file .env python cli.py run --manual-mode --execute      # one cycle, real PAPER order
-uv run --env-file .env python cli.py run --execute --loop             # autonomous, LLM, every 15 min
+uv run --env-file .env cli.py run --manual-mode                # one cycle, dry run, you pick the entry
+uv run --env-file .env cli.py run --manual-mode --execute      # one cycle, real PAPER order
+uv run --env-file .env cli.py run --execute --loop             # autonomous, LLM, every 15 min
 ```
 
 `--execute` is the only way an order is submitted; the client is still
@@ -123,3 +123,40 @@ paper-only. Every cycle appends one JSON line to `logs/cycles.jsonl`
 
 Spreads require Alpaca **options trading level 3** on the paper account; the
 agent checks this before arming an entry.
+
+### Dry-run checklist: verify everything works end-to-end
+
+Run these in order, during US market hours, with your paper keys in `.env`.
+Nothing here submits an order.
+
+```bash
+# 1. Unit tests — pure logic, no credentials needed
+uv run pytest
+
+# 2. Account state — proves your keys work and shows equity + options level
+#    (options_trading_level must be >= 3 to trade spreads later)
+uv run --env-file .env cli.py account
+
+# 3. Trading signals — RSI/ATR/MACD and fired events per whitelisted symbol.
+#    On a calm bar most symbols show gate=no_event; that is the normal idle state.
+uv run --env-file .env cli.py candidates
+
+# 4. Option screener — the exact spread that would be picked for one symbol.
+#    Also confirms the options feed returns implied volatility (a missing_iv
+#    rejection count here means the feed has no IV and nothing can be ranked).
+uv run --env-file .env cli.py screen SPY --direction CALL
+
+# 5. Full dry-run cycle — exits evaluated, signals built, you pick a candidate
+#    (or press Enter to pass), spread screened, risk-sized... but NOT submitted.
+uv run --env-file .env cli.py run --manual-mode
+
+# 6. Inspect the journal record the cycle just wrote
+tail -1 logs/cycles.jsonl
+```
+
+Expected outcome of step 5: the log ends with `outcome: planned` (an entry or
+exit was planned but not sent — the default is a dry run) or `outcome: hold`
+(no event fired anywhere, nothing to do). The journal line from step 6 shows
+every candidate, gate result, and the exact order plan that would have been
+submitted. Only when all of this looks right add `--execute` for a real paper
+order.

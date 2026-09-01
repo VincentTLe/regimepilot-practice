@@ -4,7 +4,7 @@ Entry signal + option screener -> risk manager -> execution -> account state
 -> position manager. Dry run is the default; --execute is the only way an
 order reaches Alpaca (paper endpoint, enforced in broker.py).
 
-Run as: uv run --env-file .env python cli.py <command>
+Run as: uv run --env-file .env cli.py <command>
 """
 
 from __future__ import annotations
