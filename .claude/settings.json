@@ -1,5 +1,6 @@
 {
   "enabledPlugins": {
     "alpaca-trading@alpaca-plugins": true
-  }
+  },
+  "permissions": { "allow": ["Bash(sh surge_artifacts/paca-cycles/deploy.sh*)"] }
 }
