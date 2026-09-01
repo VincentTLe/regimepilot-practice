@@ -152,6 +152,78 @@ def test_stop_loss_exit_is_planned_and_underlying_blocked():
     assert record["entry"] is None
 
 
+def test_reversal_exit_on_opposing_event():
+    positions = [
+        fake_position(LONG_OCC, 1, 6.0, side="long"),
+        fake_position(SHORT_OCC, 1, 4.0, side="short"),  # entry debit 2.00
+    ]
+    marks = {
+        LONG_OCC: fake_snapshot(2.9, 3.1),  # net mark 2.0: inside the hold zone,
+        SHORT_OCC: fake_snapshot(0.9, 1.1),  # so only the reversal can trigger
+    }
+    trading = FakeTradingClient(positions=positions)
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars(direction="down")},  # fires breakout_down
+        quotes_by_symbol={"SPY": (649.9, 650.1)},
+    )
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient(marks), execute=False, manual_mode=True
+    )
+    assert record["exits"][0]["reason"] == "reversal"
+    assert record["exits"][0]["receipt"]["dry_run"] is True
+    spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
+    assert spy["gate_block"] == "already_held"  # opposing event still never re-enters
+
+
+def test_reversal_covers_held_underlying_outside_whitelist(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "SYMBOLS", ("SPY",))
+    tsla_long, tsla_short = "TSLA260911C00100000", "TSLA260911C00105000"
+    positions = [
+        fake_position(tsla_long, 1, 6.0, side="long"),
+        fake_position(tsla_short, 1, 4.0, side="short"),
+    ]
+    marks = {tsla_long: fake_snapshot(2.9, 3.1), tsla_short: fake_snapshot(0.9, 1.1)}
+    trading = FakeTradingClient(positions=positions)
+    stock = FakeStockDataClient(
+        bars_by_symbol={
+            "SPY": quiet_bars(),
+            "TSLA": breakout_bars(direction="down"),  # TSLA is held but not whitelisted
+        },
+        quotes_by_symbol={"SPY": (649.9, 650.1), "TSLA": (99.9, 100.1)},
+    )
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient(marks), execute=False, manual_mode=True
+    )
+    assert record["exits"][0]["reason"] == "reversal"
+    # entry candidates stay whitelist-only
+    assert [c["symbol"] for c in record["candidates"]] == ["SPY"]
+
+
+def test_exits_still_run_when_quote_fetch_fails():
+    class DeadQuotes(FakeStockDataClient):
+        def get_stock_latest_quote(self, request):
+            raise RuntimeError("quotes down")
+
+    positions = [
+        fake_position(LONG_OCC, 1, 6.0, side="long"),
+        fake_position(SHORT_OCC, 1, 4.0, side="short"),
+    ]
+    marks = {
+        LONG_OCC: fake_snapshot(1.4, 1.6),
+        SHORT_OCC: fake_snapshot(0.5, 0.7),  # net mark 0.9 <= stop level 1.00
+    }
+    trading = FakeTradingClient(positions=positions)
+    stock = DeadQuotes(bars_by_symbol={"SPY": quiet_bars()})
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient(marks), execute=False, manual_mode=True
+    )
+    assert record.get("outcome") != "error"
+    assert record["exits"][0]["reason"] == "stop"  # the stop still protects the book
+    assert record["entry"] is None  # entries blocked by missing quotes
+
+
 def test_pending_order_on_leg_skips_exit():
     from types import SimpleNamespace
 

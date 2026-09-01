@@ -89,7 +89,7 @@ _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_sign
 _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "strike_band_pct", "max_width_steps",
                   "min_open_interest", "max_quote_age_seconds", "max_leg_spread_bps", "min_net_debit"}
 _RISK_KEYS = {"per_entry_fraction", "per_cycle_fraction", "total_fraction"}
-_EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte"}
+_EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit"}
 _LLM_KEYS = {"primary_model", "fallback_models"}
 
 
@@ -148,6 +148,9 @@ def validate(raw: object) -> dict[str, object]:
     values["STOP_FRACTION"] = _number(exits, "exits", "stop_fraction", 0, 1, lo_open=True, hi_open=True)
     values["TAKE_PROFIT_MULT"] = _number(exits, "exits", "take_profit_mult", 1, lo_open=True)
     values["EXIT_DTE"] = _integer(exits, "exits", "exit_dte", 0)
+    if not isinstance(exits["reversal_exit"], bool):
+        _fail("exits.reversal_exit", "must be true or false", exits["reversal_exit"])
+    values["REVERSAL_EXIT"] = exits["reversal_exit"]
 
     llm = _section(raw, "llm", _LLM_KEYS)
     primary = llm["primary_model"]
@@ -203,5 +206,6 @@ TOTAL_FRACTION: float = _VALUES["TOTAL_FRACTION"]  # type: ignore[assignment]
 STOP_FRACTION: float = _VALUES["STOP_FRACTION"]  # type: ignore[assignment]
 TAKE_PROFIT_MULT: float = _VALUES["TAKE_PROFIT_MULT"]  # type: ignore[assignment]
 EXIT_DTE: int = _VALUES["EXIT_DTE"]  # type: ignore[assignment]
+REVERSAL_EXIT: bool = _VALUES["REVERSAL_EXIT"]  # type: ignore[assignment]
 PRIMARY_MODEL: str = _VALUES["PRIMARY_MODEL"]  # type: ignore[assignment]
 FALLBACK_MODELS: tuple[str, ...] = _VALUES["FALLBACK_MODELS"]  # type: ignore[assignment]

@@ -81,9 +81,14 @@ All numbers below are the shipped `settings.yaml` defaults — change them there
   premium per cycle ≤ 1%, total open premium at risk ≤ 10%. Unknown equity or
   unknown open risk refuses entries.
 - **Exits (mechanical only, before entries, every cycle)**: close the spread
-  when net mark ≤ −50% of entry debit, ≥ +100%, or DTE ≤ 2. The LLM is never
-  consulted on exits. Entry debit comes from Alpaca's per-leg
-  `avg_entry_price`, so it survives restarts.
+  when net mark ≤ −50% of entry debit, ≥ +100%, DTE ≤ 2, or — the **reversal
+  exit** (`reversal_exit: true`) — when an entry event fires *against* the
+  spread's direction on its underlying (e.g. `gap_down` while holding a call
+  spread). Precedence: expiry → reversal → stop → take-profit; reversal, like
+  expiry, works even when the entry debit or marks are unknown. The LLM is
+  never consulted on exits. Entry debit comes from Alpaca's per-leg
+  `avg_entry_price`, so it survives restarts. Held underlyings get signal
+  coverage even if removed from the whitelist.
 - **Orders**: one MLEG limit order per action (entry at the fresh net debit,
   exit at the fresh net credit — negative limit per Alpaca's convention),
   time-in-force day, deterministic `client_order_id` per cycle.

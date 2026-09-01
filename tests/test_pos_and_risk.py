@@ -111,6 +111,58 @@ def test_expiry_exit_survives_missing_marks():
     assert decision is not None and decision.reason == "expiry" and decision.net_mark is None
 
 
+def test_opposing_event_fired_mapping():
+    from data_models import Event
+
+    call_spread = spread()  # option_type "C" — bullish
+    put_event = (Event(kind="gap_down", direction="PUT"),)
+    call_event = (Event(kind="breakout_up", direction="CALL"),)
+    assert pos_and_risk.opposing_event_fired(call_spread, put_event) is True
+    assert pos_and_risk.opposing_event_fired(call_spread, call_event) is False
+    assert pos_and_risk.opposing_event_fired(call_spread, ()) is False
+    put_spread = OpenSpread(
+        underlying="SPY", expiration=EXP, option_type="P",
+        long_symbol="L", short_symbol="S", qty=1, net_entry_debit=2.0,
+    )
+    assert pos_and_risk.opposing_event_fired(put_spread, call_event) is True
+    assert pos_and_risk.opposing_event_fired(put_spread, put_event) is False
+
+
+def test_reversal_exit_fires_between_stop_and_take_profit():
+    # marks well inside the hold zone: only the opposing event can trigger this
+    decision = pos_and_risk.exit_decision(
+        spread(), quote(2.9, 3.1), quote(0.9, 1.1), TODAY, opposing_event=True
+    )
+    assert decision is not None and decision.reason == "reversal"
+    assert decision.net_mark == 2.0
+
+
+def test_reversal_exit_survives_unknown_debit_and_missing_marks():
+    # stop/TP are blocked by unknown debit or missing quotes; reversal is not
+    unknown_debit = pos_and_risk.exit_decision(
+        spread(debit=None), quote(2.9, 3.1), quote(0.9, 1.1), TODAY, opposing_event=True
+    )
+    assert unknown_debit is not None and unknown_debit.reason == "reversal"
+    no_marks = pos_and_risk.exit_decision(spread(), None, None, TODAY, opposing_event=True)
+    assert no_marks is not None and no_marks.reason == "reversal" and no_marks.net_mark is None
+
+
+def test_expiry_wins_over_reversal():
+    near = spread(expiration=date(2026, 9, 1))
+    decision = pos_and_risk.exit_decision(near, None, None, TODAY, opposing_event=True)
+    assert decision is not None and decision.reason == "expiry"
+
+
+def test_reversal_exit_can_be_disabled_in_settings(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "REVERSAL_EXIT", False)
+    decision = pos_and_risk.exit_decision(
+        spread(), quote(2.9, 3.1), quote(0.9, 1.1), TODAY, opposing_event=True
+    )
+    assert decision is None  # back to hold: stop/TP zone untouched
+
+
 def test_missing_marks_or_unknown_debit_hold_instead_of_guessing():
     assert pos_and_risk.exit_decision(spread(), None, quote(1, 1.2), TODAY) is None
     assert pos_and_risk.exit_decision(spread(), quote(1, 1.2), quote(None, None), TODAY) is None

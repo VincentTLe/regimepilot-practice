@@ -49,6 +49,7 @@ def broken(mutate) -> dict:
         (lambda r: r.update(symbols=[]), "symbols"),
         (lambda r: r.update(symbols="SPY"), "symbols"),  # string, not a list
         (lambda r: r["llm"].update(primary_model=""), "llm.primary_model"),
+        (lambda r: r["exits"].update(reversal_exit=1), "exits.reversal_exit"),  # must be a bool
     ],
 )
 def test_validate_rejects_and_names_the_key(mutate, expect_in_message):

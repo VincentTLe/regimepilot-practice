@@ -39,6 +39,7 @@ exits:                       # mechanical, checked every cycle — the LLM is ne
   stop_fraction: 0.5         # stop-loss: exit when net mark <= this fraction of entry debit (0.5 = -50%)
   take_profit_mult: 2.0      # take-profit: exit when net mark >= this multiple of entry debit (2.0 = +100%)
   exit_dte: 2                # always exit at this many days to expiration or fewer
+  reversal_exit: true        # close a spread when an entry event fires AGAINST it (e.g. gap_down while holding a call spread)
 
 llm:                         # OpenRouter models for the entry decision (skipped with --manual-mode)
   primary_model: z-ai/glm-5.3-flash

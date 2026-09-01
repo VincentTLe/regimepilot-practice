@@ -12,7 +12,7 @@ import re
 from datetime import date, datetime
 
 import settings
-from data_models import ExitDecision, LegPosition, LegQuote, OpenSpread
+from data_models import Event, ExitDecision, LegPosition, LegQuote, OpenSpread
 
 # Exit thresholds and risk caps live in settings.yaml (approved 2026-08-31).
 
@@ -75,22 +75,39 @@ def pair_spreads(
     return spreads, warnings
 
 
+def opposing_event_fired(spread: OpenSpread, events: tuple[Event, ...]) -> bool:
+    """True when any entry event points against the spread's direction.
+
+    A call spread ("C") is bullish, so any PUT-direction event opposes it;
+    a put spread ("P") is bearish, so any CALL-direction event opposes it.
+    """
+    against = "PUT" if spread.option_type == "C" else "CALL"
+    return any(event.direction == against for event in events)
+
+
 def exit_decision(
     spread: OpenSpread,
     long_quote: LegQuote | None,
     short_quote: LegQuote | None,
     today: date,
+    opposing_event: bool = False,
 ) -> ExitDecision | None:
     """Mechanical exit verdict for one open spread, or None to keep holding.
 
-    Expiry (DTE <= settings.EXIT_DTE) always exits, even on missing marks. Stop and
-    take-profit need both a known entry debit and fresh two-sided marks; when
-    either is unknown we hold and let the caller log the gap rather than guess.
+    Precedence: expiry, reversal, stop, take-profit. Expiry (DTE <=
+    settings.EXIT_DTE) and reversal (an entry event against the spread, if
+    settings.REVERSAL_EXIT) exit even on missing marks or unknown entry debit —
+    they are signal-based. Stop and take-profit need both a known entry debit
+    and fresh two-sided marks; when either is unknown we hold and let the
+    caller log the gap rather than guess.
     """
     dte = (spread.expiration - today).days
     if dte <= settings.EXIT_DTE:
         net_mark = _net_mark(long_quote, short_quote)
         return ExitDecision(spread=spread, reason="expiry", net_mark=net_mark)
+    if opposing_event and settings.REVERSAL_EXIT:
+        net_mark = _net_mark(long_quote, short_quote)
+        return ExitDecision(spread=spread, reason="reversal", net_mark=net_mark)
     if spread.net_entry_debit is None:
         return None
     net_mark = _net_mark(long_quote, short_quote)

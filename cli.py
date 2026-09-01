@@ -125,7 +125,18 @@ def run_cycle(
         append_journal(record)
         return record
 
-    # --- Position manager: mechanical exits run first and are never gated ---
+    # --- Trading signals: needed by the reversal exit AND the entry side, so they
+    # cover the whitelist plus every held underlying (even one removed from the list)
+    watch_symbols = tuple(dict.fromkeys(config.symbols + tuple(s.underlying for s in spreads)))
+    try:
+        mids = broker.fetch_spot_mids(stock_data, watch_symbols)
+    except broker.BrokerError as error:
+        # Exits must still run on a quote outage; entries will gate out naturally.
+        logger.error("quote read failed, exits still run, entries blocked: {}", error)
+        mids = {symbol: None for symbol in watch_symbols}
+    features = _build_trading_signals(watch_symbols, config, stock_data, mids, clock.server_time)
+
+    # --- Position manager: mechanical exits run before entries and are never gated ---
     exits: list[dict] = []
     if spreads:
         leg_symbols = [s for spread in spreads for s in (spread.long_symbol, spread.short_symbol)]
@@ -137,7 +148,12 @@ def run_cycle(
         for spread in spreads:
             long_q = broker.leg_quote_from_snapshot(spread.long_symbol, 0.0, snapshots.get(spread.long_symbol), None)
             short_q = broker.leg_quote_from_snapshot(spread.short_symbol, 0.0, snapshots.get(spread.short_symbol), None)
-            decision = pos_and_risk.exit_decision(spread, long_q, short_q, clock.server_time.date())
+            opposing = spread.underlying in features and pos_and_risk.opposing_event_fired(
+                spread, features[spread.underlying].events
+            )
+            decision = pos_and_risk.exit_decision(
+                spread, long_q, short_q, clock.server_time.date(), opposing_event=opposing
+            )
             if decision is None:
                 if spread.net_entry_debit is None:
                     logger.warning("cannot compute stop/TP for {} (unknown entry debit)", spread.underlying)
@@ -159,24 +175,15 @@ def run_cycle(
             logger.info("exit {}: {}", entry["spread"], entry.get("receipt", entry.get("skipped")))
     record["exits"] = exits
 
-    # --- Entry signal: OHLCV -> indicators -> events -> gates, per symbol ---
-    try:
-        mids = broker.fetch_spot_mids(stock_data, config.symbols)
-    except broker.BrokerError as error:
-        logger.error("quote read failed: {}", error)
-        record["outcome"] = "error"
-        record["error"] = str(error)
-        append_journal(record)
-        return record
-
-    features = _build_trading_signals(config, stock_data, mids, clock.server_time)
+    # --- Entry candidates: whitelist symbols only ---
+    whitelist_features = {symbol: features[symbol] for symbol in config.symbols}
     busy = {s.underlying for s in spreads} | {
         pos_and_risk.parse_occ(sym)[0]
         for sym in account.open_order_symbols
         if pos_and_risk.parse_occ(sym) is not None
     }
     candidates = []
-    for c in signals.build_candidates(features, clock.is_open, config.bar_seconds):
+    for c in signals.build_candidates(whitelist_features, clock.is_open, config.bar_seconds):
         if c.gate_block is None and c.symbol in busy:
             # a held/pending underlying is not a candidate
             c = replace(c, gate_block="already_held")
@@ -207,15 +214,15 @@ def run_cycle(
 
 
 def _build_trading_signals(
-    config: Config, stock_data: object, mids: dict, now: datetime
+    symbols: tuple[str, ...], config: Config, stock_data: object, mids: dict, now: datetime
 ) -> dict[str, SymbolFeatures]:
-    """Create the trading signals: OHLCV -> RSI/ATR/MACD -> events, per whitelisted symbol.
+    """Create the trading signals: OHLCV -> RSI/ATR/MACD -> events, per symbol.
 
     A failed symbol is marked data_error and skipped, never invented — one bad
     symbol must not kill the cycle.
     """
     features: dict[str, SymbolFeatures] = {}
-    for symbol in config.symbols:
+    for symbol in symbols:
         try:
             frame = market_data.fetch_ohlcv(stock_data, symbol, config.bar_timeframe, now)
             frame = signals.add_indicators(frame)
@@ -424,7 +431,7 @@ def candidates() -> None:
     config, trading, stock_data, _ = _bootstrap()
     clock = broker.fetch_clock(trading)
     mids = broker.fetch_spot_mids(stock_data, config.symbols)
-    features = _build_trading_signals(config, stock_data, mids, clock.server_time)
+    features = _build_trading_signals(config.symbols, config, stock_data, mids, clock.server_time)
     for c in signals.build_candidates(features, clock.is_open, config.bar_seconds):
         events = ",".join(e.kind for e in c.events) or "-"
         rsi = f"{c.rsi:.1f}" if c.rsi is not None else "-"

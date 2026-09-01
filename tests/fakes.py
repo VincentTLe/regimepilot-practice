@@ -109,12 +109,15 @@ def quiet_bars(count: int = 60, *, end: datetime | None = None, bar_seconds: int
     return bars
 
 
-def breakout_bars(count: int = 60, **kwargs) -> list[SimpleNamespace]:
-    """quiet_bars but the last completed bar has a +5 body (no gap): breakout_up."""
+def breakout_bars(count: int = 60, direction: str = "up", **kwargs) -> list[SimpleNamespace]:
+    """quiet_bars but the last completed bar has a 5-point body (no gap):
+    breakout_up, or breakout_down with direction="down"."""
     bars = quiet_bars(count, **kwargs)
     prev_close = bars[-2].close
-    bars[-1] = fake_bar(bars[-1].timestamp, prev_close, prev_close + 5.2,
-                        prev_close - 0.2, prev_close + 5.0)
+    body = 5.0 if direction == "up" else -5.0
+    close = prev_close + body
+    bars[-1] = fake_bar(bars[-1].timestamp, prev_close, max(prev_close, close) + 0.2,
+                        min(prev_close, close) - 0.2, close)
     return bars
 
 
