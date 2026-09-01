@@ -11,9 +11,10 @@ defaults. Rules approved 2026-08-31, width/moneyness/ranking revised
 The screener runs once per entry attempt, on the single `(symbol, direction)`
 the decision layer picked:
 
-1. **Expiry** — nearest listed expiry (weeklies included) at least
-   `min_dte` (5) days out, ignoring anything past
-   `max_expiry_lookahead_days` (45). `pick_expiration`
+1. **Expiries** — the nearest `expiries_to_screen` (3) listed expiries
+   (weeklies included) at least `min_dte` (5) days out, ignoring anything
+   past `max_expiry_lookahead_days` (45). Steps 2–5 run per expiry; the
+   ranking pools the survivors from all of them. `pick_expirations`
 2. **Strike universe** — strikes within ±`strike_band_pct` (10%) of spot.
    With `otm_only: true`: out-of-the-money strikes only (calls above spot,
    puts below), **plus the one at-the-money strike bracketing spot** on the
@@ -54,6 +55,15 @@ parentheses.
   out (a separate exit rule closes anything that reaches DTE ≤ 2); the cap
   stops the screener from drifting into far-dated expiries whose premium is
   mostly time value unrelated to a bar-scale momentum signal.
+- **`expiries_to_screen` (3)** — how many of the nearest eligible expiries
+  compete in one ranked pool. More expiries = more candidates and a real
+  choice between near/cheap-theta and far/more-time spreads, at the cost of
+  one snapshot fetch covering more contracts. Note the ranking has no time
+  preference: equal reward-to-risk at 7 and 21 DTE ties, and further
+  expiries often price *better* rr for the same strikes — expect the pick
+  to lean later. Keep the contract fetch in mind before raising it: SPY/QQQ
+  list daily expirations, and `broker.fetch_contracts` caps out at 5 000
+  contracts.
 - **`strike_band_pct` (0.10)** (`too_few_strikes_in_band`) — bounds both the
   API fetch and the universe: strikes beyond ±10% of spot are either deep ITM
   (all intrinsic, wide quotes) or lottery tickets, and neither belongs in a

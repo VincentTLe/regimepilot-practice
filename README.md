@@ -71,7 +71,8 @@ All numbers below are the shipped `settings.yaml` defaults — change them there
 - **Decision**: the LLM sees the event-firing candidates (events + RSI/ATR/MACD
   readings) and returns `{action, symbol, direction, thesis}`. Malformed output
   means no entry. Deterministic code picks everything else.
-- **Spread selection**: nearest expiry (weeklies included) with **≥5 DTE**;
+- **Spread selection**: the nearest **3 expiries** (weeklies included) with
+  **≥5 DTE**, ranked as one pool;
   strikes within ±10% of spot, OTM only plus the one ATM strike bracketing
   spot; pair widths between **2% and 5% of spot**; per-leg filter: open
   interest ≥ 100, fresh two-sided quote (within 10 s of the server clock),

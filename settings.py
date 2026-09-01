@@ -86,9 +86,10 @@ _TOP_KEYS = {"symbols", "bar_timeframe", "loop_interval_seconds",
              "signals", "screener", "risk", "exits", "llm"}
 _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_signal",
                 "atr_event_mult", "stale_bar_factor", "min_bars"}
-_SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "strike_band_pct", "otm_only",
-                  "min_width_pct", "max_width_pct", "min_open_interest",
-                  "max_quote_age_seconds", "max_leg_spread_bps", "min_net_debit"}
+_SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
+                  "strike_band_pct", "otm_only", "min_width_pct", "max_width_pct",
+                  "min_open_interest", "max_quote_age_seconds", "max_leg_spread_bps",
+                  "min_net_debit"}
 _RISK_KEYS = {"per_entry_fraction", "per_cycle_fraction", "total_fraction"}
 _EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit"}
 _LLM_KEYS = {"primary_model", "fallback_models"}
@@ -131,6 +132,7 @@ def validate(raw: object) -> dict[str, object]:
     values["MIN_DTE"] = _integer(scr, "screener", "min_dte", 1)
     values["MAX_EXPIRY_LOOKAHEAD_DAYS"] = _integer(
         scr, "screener", "max_expiry_lookahead_days", values["MIN_DTE"] + 1)
+    values["EXPIRIES_TO_SCREEN"] = _integer(scr, "screener", "expiries_to_screen", 1)
     values["STRIKE_BAND_PCT"] = _number(scr, "screener", "strike_band_pct", 0, 0.5, lo_open=True)
     if not isinstance(scr["otm_only"], bool):
         _fail("screener.otm_only", "must be true or false", scr["otm_only"])
@@ -201,6 +203,7 @@ STALE_BAR_FACTOR: float = _VALUES["STALE_BAR_FACTOR"]  # type: ignore[assignment
 MIN_BARS: int = _VALUES["MIN_BARS"]  # type: ignore[assignment]
 MIN_DTE: int = _VALUES["MIN_DTE"]  # type: ignore[assignment]
 MAX_EXPIRY_LOOKAHEAD_DAYS: int = _VALUES["MAX_EXPIRY_LOOKAHEAD_DAYS"]  # type: ignore[assignment]
+EXPIRIES_TO_SCREEN: int = _VALUES["EXPIRIES_TO_SCREEN"]  # type: ignore[assignment]
 STRIKE_BAND_PCT: float = _VALUES["STRIKE_BAND_PCT"]  # type: ignore[assignment]
 OTM_ONLY: bool = _VALUES["OTM_ONLY"]  # type: ignore[assignment]
 MIN_WIDTH_PCT: float = _VALUES["MIN_WIDTH_PCT"]  # type: ignore[assignment]

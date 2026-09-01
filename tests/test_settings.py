@@ -49,6 +49,7 @@ def broken(mutate) -> dict:
         (lambda r: r["screener"].update(min_width_pct=0.06), "screener.min_width_pct"),  # > max
         (lambda r: r["screener"].update(max_width_pct=0.9), "screener.max_width_pct"),
         (lambda r: r["screener"].update(otm_only=1), "screener.otm_only"),  # must be a bool
+        (lambda r: r["screener"].update(expiries_to_screen=0), "screener.expiries_to_screen"),
         (lambda r: r.update(bar_timeframe="fifteen"), "bar_timeframe"),
         (lambda r: r.update(symbols=[]), "symbols"),
         (lambda r: r.update(symbols="SPY"), "symbols"),  # string, not a list

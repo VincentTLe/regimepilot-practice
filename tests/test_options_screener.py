@@ -19,6 +19,7 @@ def pinned_screener_settings(monkeypatch):
     monkeypatch.setattr(settings, "OTM_ONLY", False)
     monkeypatch.setattr(settings, "MIN_WIDTH_PCT", 0.03)
     monkeypatch.setattr(settings, "MAX_WIDTH_PCT", 0.05)
+    monkeypatch.setattr(settings, "EXPIRIES_TO_SCREEN", 3)
 
 
 def leg(
@@ -33,14 +34,17 @@ def leg(
 
 # --- expiration ---
 
-def test_pick_expiration_nearest_at_least_5_dte_weeklies_included():
+def test_pick_expirations_nearest_n_at_least_5_dte(monkeypatch):
+    monkeypatch.setattr(settings, "EXPIRIES_TO_SCREEN", 2)
     friday_weekly = date(2026, 9, 4)  # DTE 4 -> too near
     next_weekly = date(2026, 9, 8)  # DTE 8 -> nearest eligible
     monthly = date(2026, 9, 18)
-    assert screener.pick_expiration({friday_weekly, next_weekly, monthly}, TODAY) == next_weekly
-    assert screener.pick_expiration({friday_weekly}, TODAY) is None
+    later = date(2026, 9, 25)  # third eligible -> beyond the N=2 cut
+    listed = {friday_weekly, next_weekly, monthly, later}
+    assert screener.pick_expirations(listed, TODAY) == [next_weekly, monthly]
+    assert screener.pick_expirations({friday_weekly}, TODAY) == []
     boundary = date(2026, 9, 5)  # DTE exactly 5 qualifies
-    assert screener.pick_expiration({boundary}, TODAY) == boundary
+    assert screener.pick_expirations({boundary}, TODAY) == [boundary]
 
 
 # --- leg quality ---
@@ -201,6 +205,22 @@ def test_rank_reward_to_risk_first_with_quote_tiebreak():
     tie_wide = sq(wide, wide, 5.0, 2.5)
     tie_tight = sq(tight, tight, 5.0, 2.5)
     assert screener.rank_spreads([tie_wide, tie_tight])[0] is tie_tight
+
+
+def test_select_spread_ranks_across_expiries():
+    near, far = date(2026, 9, 11), date(2026, 9, 18)
+    # near chain's best: 100/105, debit 3.5 - 1.5 = 2.0 -> rr 1.5
+    # far chain: 95/100, debit 5.1 - 4.0 = 1.1 -> rr 3.55, best overall
+    far_chain = {
+        95.0: leg("F95", 95.0, bid=5.0, ask=5.1, iv=0.20, oi=800),
+        100.0: leg("F100", 100.0, bid=4.0, ask=4.1, iv=0.21, oi=900),
+    }
+    best, tallies = screener.select_spread(
+        {near: good_chain(), far: far_chain}, "CALL", 100.0, "SPY", NOW
+    )
+    assert best is not None and best.expiration == far
+    assert (best.long.symbol, best.short.symbol) == ("F95", "F100")
+    assert tallies == {"too_wide": 1}  # near chain's 95/105 pair; summed across chains
 
 
 # --- order plans ---

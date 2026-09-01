@@ -60,24 +60,26 @@ def _screen_spread(
     clock_time: datetime,
     today,
 ) -> tuple[SpreadQuote | None, dict]:
-    """Fetch chain + snapshots for one underlying and pick the best spread."""
+    """Fetch chains + snapshots for one underlying and pick the best spread
+    across the nearest settings.EXPIRIES_TO_SCREEN eligible expiries."""
     by_expiry = broker.fetch_contracts(trading, underlying, direction, spot, today)
-    expiration = options_screener.pick_expiration(set(by_expiry), today)
-    if expiration is None:
+    expirations = options_screener.pick_expirations(set(by_expiry), today)
+    if not expirations:
         return None, {"no_expiration": 1}
-    contracts = by_expiry[expiration]
-    snapshots = broker.fetch_option_snapshots(
-        option_data, [c["symbol"] for c in contracts.values()]
-    )
-    quotes_by_strike = {
-        strike: broker.leg_quote_from_snapshot(
-            info["symbol"], strike, snapshots.get(info["symbol"]), info["open_interest"]
-        )
-        for strike, info in contracts.items()
+    symbols = [
+        info["symbol"] for exp in expirations for info in by_expiry[exp].values()
+    ]
+    snapshots = broker.fetch_option_snapshots(option_data, symbols)
+    chains = {
+        exp: {
+            strike: broker.leg_quote_from_snapshot(
+                info["symbol"], strike, snapshots.get(info["symbol"]), info["open_interest"]
+            )
+            for strike, info in by_expiry[exp].items()
+        }
+        for exp in expirations
     }
-    return options_screener.select_spread(
-        quotes_by_strike, direction, spot, expiration, underlying, clock_time
-    )
+    return options_screener.select_spread(chains, direction, spot, underlying, clock_time)
 
 
 def run_cycle(

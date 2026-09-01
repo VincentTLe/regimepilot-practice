@@ -1,8 +1,9 @@
 """Option screener: pick the expiry, enumerate debit verticals, filter, rank, plan.
 
 Pure functions over pre-fetched contracts and snapshots. Selection rule
-(approved 2026-08-31, width rule revised 2026-09-01): nearest listed expiry
-(weeklies included) with DTE >= 5; candidate strike pairs within +/-10% of spot
+(approved 2026-08-31, width rule revised 2026-09-01): the nearest
+EXPIRIES_TO_SCREEN listed expiries (weeklies included) with DTE >= MIN_DTE,
+ranked as one pool; candidate strike pairs within +/-10% of spot
 (OTM strikes plus the ATM bracketing strike when OTM_ONLY) whose width is
 between MIN_WIDTH_PCT and MAX_WIDTH_PCT of spot;
 liquidity filter per leg (open interest floor + quote quality); rank survivors
@@ -22,10 +23,11 @@ from data_models import LegPlan, LegQuote, OpenSpread, OrderPlan, SpreadQuote
 # All thresholds live in settings.yaml (screener section).
 
 
-def pick_expiration(expirations: set[date], today: date) -> date | None:
-    """Nearest listed expiry at least settings.MIN_DTE days out; None when there is none."""
-    eligible = [exp for exp in expirations if (exp - today).days >= settings.MIN_DTE]
-    return min(eligible) if eligible else None
+def pick_expirations(expirations: set[date], today: date) -> list[date]:
+    """The nearest settings.EXPIRIES_TO_SCREEN listed expiries at least
+    settings.MIN_DTE days out, nearest first; empty when there are none."""
+    eligible = sorted(exp for exp in expirations if (exp - today).days >= settings.MIN_DTE)
+    return eligible[: settings.EXPIRIES_TO_SCREEN]
 
 
 def quote_spread_bps(leg: LegQuote) -> float:
@@ -152,18 +154,24 @@ def rank_spreads(spreads: list[SpreadQuote]) -> list[SpreadQuote]:
 
 
 def select_spread(
-    quotes_by_strike: dict[float, LegQuote],
+    chains: dict[date, dict[float, LegQuote]],
     direction: str,
     spot: float,
-    expiration: date,
     underlying: str,
     server_time: datetime,
 ) -> tuple[SpreadQuote | None, dict[str, int]]:
-    spreads, rejections = enumerate_spreads(
-        quotes_by_strike, direction, spot, expiration, underlying, server_time
-    )
-    ranked = rank_spreads(spreads)
-    return (ranked[0] if ranked else None), rejections
+    """Best spread across all given expiry chains; rejection tallies are summed."""
+    all_spreads: list[SpreadQuote] = []
+    tallies: dict[str, int] = {}
+    for expiration, quotes_by_strike in chains.items():
+        spreads, rejections = enumerate_spreads(
+            quotes_by_strike, direction, spot, expiration, underlying, server_time
+        )
+        all_spreads += spreads
+        for reason, count in rejections.items():
+            tallies[reason] = tallies.get(reason, 0) + count
+    ranked = rank_spreads(all_spreads)
+    return (ranked[0] if ranked else None), tallies
 
 
 def build_entry_plan(spread: SpreadQuote, qty: int, cycle_id: str) -> OrderPlan:
