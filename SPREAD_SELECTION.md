@@ -122,6 +122,42 @@ Known bias worth watching: reward-to-risk favors the widest allowed spread
 with the furthest-OTM short leg (cheap debit, but lower probability of
 reaching max payout). The width band bounds how far this can stretch.
 
+## Worked example (AAPL CALL, 2026-09-01 ~11:35 ET)
+
+A real screen from the morning the current rules went live (run under the
+3% width floor, before it was lowered to 2%; leg cap 500 bps). The decision
+layer had picked AAPL CALL on a `breakout_up` event.
+
+- **Spot** 324.80 → expiry 2026-09-09 (8 DTE, nearest ≥ 5); strike band
+  292.50–357.50; with `otm_only` the universe starts at **322.50** (the ATM
+  bracketing strike, the last one below spot) and runs up through 355.
+- **Per-leg filter** knocked out 9 of the 13 strikes:
+  `low_open_interest: 5` (e.g. 327.50 at OI 89, 342.50 at OI 18 — under the
+  100 floor) and `wide_spread: 4` (far-OTM legs quoting 1 000–2 400 bps).
+- **Pairing** the surviving legs inside the width band (then $9.74–$16.24)
+  left two spreads; `too_narrow: 3` and `too_wide: 1` tallied the pairs that
+  didn't fit.
+- **Ranking**:
+
+  | Spread | Width | Debit | Max win | Reward-to-risk | Legs bps |
+  |---|---|---|---|---|---|
+  | **330 / 340** ← picked | 10.0 | 2.15 | 7.85 | **3.65** | 702 |
+  | 322.5 / 335 | 12.5 | 4.99 | 7.51 | 1.51 | 806 |
+
+  Both spreads offer a similar dollar payoff at max profit (~$7.5–7.9 per
+  share), but the 330/340 risks $215 per contract to the 322.5/335's $499 —
+  3.65× vs 1.51× — so it wins on the primary key and the quote tiebreak
+  never comes into play. This is the documented bias in action: the pick is
+  the cheaper, further-OTM spread, which needs AAPL above $340 by expiry for
+  the full payout, while the runner-up starts paying above ~$327.50.
+
+The same screen ten minutes earlier had returned **no spread at all**
+(every surviving leg pair fell below the width floor) — ATM leg quotes were
+observed swinging between ~200 and ~700 bps within minutes, so the set of
+acceptable spreads genuinely flickers cycle to cycle. That volatility of the
+*filter inputs*, not the ranking, is usually why one cycle plans an entry
+and the next reports `no_spread`.
+
 ## Alternatives considered (not implemented)
 
 Each of these is a one-line change to the sort key in `rank_spreads`
