@@ -1,0 +1,45 @@
+# ============================================================================
+# Trading settings — the ONE file a trader edits as market conditions change.
+#
+# Every value here is validated at startup and by `cli.py preflight`:
+# a missing key, a typo'd key, a wrong type, or an out-of-range value stops
+# the program with a message naming the exact key. Edit, save, restart.
+# ============================================================================
+
+symbols: [SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN]   # candidate underlyings scanned every cycle
+bar_timeframe: 15m           # bar duration for signals: 5m / 15m / 1h / 1d / 1w
+loop_interval_seconds: 900   # seconds between cycles with `run --loop` (900 = 15 min)
+
+signals:                     # technical analysis + entry events
+  rsi_period: 14             # bars in the RSI average (higher = smoother, slower)
+  atr_period: 14             # bars in the ATR average (the volatility yardstick for events)
+  macd_fast: 12              # fast EMA length; must be < macd_slow
+  macd_slow: 26              # slow EMA length
+  macd_signal: 9             # EMA length of the MACD signal line
+  atr_event_mult: 2.0        # gap/breakout events fire only above this many ATRs (higher = rarer, stronger)
+  stale_bar_factor: 2.0      # block entries when the last bar is older than this many bar durations
+  min_bars: 40               # completed bars required before indicators count (>= macd_slow + macd_signal)
+
+screener:                    # which vertical spreads are even considered
+  min_dte: 5                 # nearest expiry must be at least this many days out
+  max_expiry_lookahead_days: 45   # ignore expirations further out than this many days
+  strike_band_pct: 0.10      # candidate strikes within +/- this fraction of spot (0.10 = 10%)
+  max_width_steps: 3         # spread width of 1..N strike steps (wider = more risk per spread)
+  min_open_interest: 100     # per-leg liquidity floor, in contracts
+  max_quote_age_seconds: 10.0     # reject quotes older than this vs Alpaca's server clock
+  max_leg_spread_bps: 350.0  # reject legs whose bid-ask spread exceeds this (350 = 3.5% of mid)
+  min_net_debit: 0.05        # ignore junk spreads cheaper than this ($ per share)
+
+risk:                        # position sizing — all fractions of LIVE account equity
+  per_entry_fraction: 0.005  # one entry's total debit <= this fraction (0.005 = $500 on $100k)
+  per_cycle_fraction: 0.01   # new premium per cycle <= this fraction of equity
+  total_fraction: 0.10       # total open premium at risk <= this fraction of equity
+
+exits:                       # mechanical, checked every cycle — the LLM is never consulted
+  stop_fraction: 0.5         # stop-loss: exit when net mark <= this fraction of entry debit (0.5 = -50%)
+  take_profit_mult: 2.0      # take-profit: exit when net mark >= this multiple of entry debit (2.0 = +100%)
+  exit_dte: 2                # always exit at this many days to expiration or fewer
+
+llm:                         # OpenRouter models for the entry decision (skipped with --manual-mode)
+  primary_model: z-ai/glm-5.3-flash
+  fallback_models: [minimax/minimax-m3:free, nvidia/nemotron-3-super-120b-a12b:free]

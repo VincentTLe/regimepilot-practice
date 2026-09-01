@@ -39,10 +39,17 @@ def manual_answers(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
 
 
-def make_config(symbols="SPY"):
+@pytest.fixture(autouse=True)
+def spy_only_whitelist(monkeypatch):
+    """These tests trade a one-symbol whitelist regardless of settings.yaml."""
+    import settings
+
+    monkeypatch.setattr(settings, "SYMBOLS", ("SPY",))
+
+
+def make_config():
     return broker.load_config(
-        {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "ALPACA_PAPER": "true",
-         "SYMBOLS": symbols, "BAR_TIMEFRAME": "15m"}
+        {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "ALPACA_PAPER": "true"}
     )
 
 
@@ -212,3 +219,37 @@ def test_screen_command_rejects_bad_direction(monkeypatch):
     monkeypatch.setattr(cli, "_bootstrap", lambda: (make_config(), None, None, None))
     result = CliRunner().invoke(cli.app, ["screen", "SPY", "--direction", "SIDEWAYS"])
     assert result.exit_code != 0
+
+
+def test_preflight_passes_with_fakes(monkeypatch):
+    trading, _, _ = make_clients()
+    config = make_config()
+    monkeypatch.setattr(cli.broker, "load_config", lambda: config)
+    monkeypatch.setattr(cli.broker, "build_clients", lambda config: (trading, None, None))
+    result = CliRunner().invoke(cli.app, ["preflight"])
+    assert result.exit_code == 0
+    assert "preflight passed" in result.output
+    assert "STOP_FRACTION" in result.output  # settings values are echoed
+
+
+def test_preflight_fails_on_connectivity(monkeypatch):
+    class DeadClock(FakeTradingClient):
+        def get_clock(self):
+            raise RuntimeError("down")
+
+    config = make_config()
+    monkeypatch.setattr(cli.broker, "load_config", lambda: config)
+    monkeypatch.setattr(cli.broker, "build_clients", lambda config: (DeadClock(), None, None))
+    result = CliRunner().invoke(cli.app, ["preflight"])
+    assert result.exit_code == 1
+    assert "FAIL Alpaca connectivity" in result.output
+
+
+def test_preflight_fails_on_missing_credentials(monkeypatch):
+    def refuse():
+        raise broker.ConfigError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
+
+    monkeypatch.setattr(cli.broker, "load_config", refuse)
+    result = CliRunner().invoke(cli.app, ["preflight"])
+    assert result.exit_code == 1
+    assert "FAIL credentials" in result.output

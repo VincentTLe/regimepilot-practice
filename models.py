@@ -12,10 +12,8 @@ from datetime import date, datetime
 class Config:
     api_key: str
     secret_key: str
-    symbols: tuple[str, ...]
-    bar_timeframe: str  # raw env value, e.g. "15m", "1h", "1d", "1w"
-    bar_amount: int
-    bar_unit: str  # one of "m", "h", "d", "w"
+    symbols: tuple[str, ...]  # from settings.yaml
+    bar_timeframe: str  # from settings.yaml, e.g. "15m", "1h", "1d", "1w"
     bar_seconds: int
     openrouter_api_key: str | None
 

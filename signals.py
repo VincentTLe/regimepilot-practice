@@ -18,16 +18,8 @@ from datetime import datetime
 
 import pandas as pd
 
+import settings
 from models import Event, SymbolFeatures
-
-RSI_PERIOD = 14
-ATR_PERIOD = 14
-MACD_FAST = 12
-MACD_SLOW = 26
-MACD_SIGNAL = 9
-ATR_EVENT_MULT = 2.0
-STALE_BAR_FACTOR = 2.0  # bars older than this many bar-durations are stale
-MIN_BARS = 40  # enough for MACD(12/26/9) + Wilder warmup to settle
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -36,8 +28,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     close = out["close"]
 
     delta = close.diff()
-    gain = delta.clip(lower=0.0).ewm(alpha=1 / RSI_PERIOD, adjust=False).mean()
-    loss = (-delta.clip(upper=0.0)).ewm(alpha=1 / RSI_PERIOD, adjust=False).mean()
+    gain = delta.clip(lower=0.0).ewm(alpha=1 / settings.RSI_PERIOD, adjust=False).mean()
+    loss = (-delta.clip(upper=0.0)).ewm(alpha=1 / settings.RSI_PERIOD, adjust=False).mean()
     out["rsi"] = 100.0 - 100.0 / (1.0 + gain / loss)
     out.loc[loss == 0.0, "rsi"] = 100.0
 
@@ -46,11 +38,11 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         [out["high"] - out["low"], (out["high"] - prev_close).abs(), (out["low"] - prev_close).abs()],
         axis=1,
     ).max(axis=1)
-    out["atr"] = true_range.ewm(alpha=1 / ATR_PERIOD, adjust=False).mean()
+    out["atr"] = true_range.ewm(alpha=1 / settings.ATR_PERIOD, adjust=False).mean()
 
-    macd = close.ewm(span=MACD_FAST, adjust=False).mean() - close.ewm(span=MACD_SLOW, adjust=False).mean()
+    macd = close.ewm(span=settings.MACD_FAST, adjust=False).mean() - close.ewm(span=settings.MACD_SLOW, adjust=False).mean()
     out["macd"] = macd
-    out["macd_signal"] = macd.ewm(span=MACD_SIGNAL, adjust=False).mean()
+    out["macd_signal"] = macd.ewm(span=settings.MACD_SIGNAL, adjust=False).mean()
     out["macd_hist"] = out["macd"] - out["macd_signal"]
     return out
 
@@ -66,11 +58,11 @@ def detect_events(df: pd.DataFrame) -> tuple[Event, ...]:
 
     events: list[Event] = []
     gap = last["open"] - prev["close"]
-    if abs(gap) > ATR_EVENT_MULT * atr:
+    if abs(gap) > settings.ATR_EVENT_MULT * atr:
         events.append(Event(kind="gap_up" if gap > 0 else "gap_down",
                             direction="CALL" if gap > 0 else "PUT"))
     body = last["close"] - last["open"]
-    if abs(body) > ATR_EVENT_MULT * atr:
+    if abs(body) > settings.ATR_EVENT_MULT * atr:
         events.append(Event(kind="breakout_up" if body > 0 else "breakout_down",
                             direction="CALL" if body > 0 else "PUT"))
     hist, prev_hist = last["macd_hist"], prev["macd_hist"]
@@ -90,7 +82,7 @@ def build_signal(
     bar_seconds: int,
 ) -> SymbolFeatures:
     """Indicator readings + events for one symbol from its completed-bars frame."""
-    enough = len(df) >= MIN_BARS
+    enough = len(df) >= settings.MIN_BARS
     bar_age = None
     if len(df) > 0:
         bar_age = now.timestamp() - (df.index[-1].timestamp() + bar_seconds)
@@ -121,7 +113,7 @@ def gate_block(features: SymbolFeatures, market_is_open: bool, bar_seconds: int)
     """
     if not market_is_open:
         return "market_closed"
-    if features.bar_age_seconds is None or features.bar_age_seconds > STALE_BAR_FACTOR * bar_seconds:
+    if features.bar_age_seconds is None or features.bar_age_seconds > settings.STALE_BAR_FACTOR * bar_seconds:
         return "stale_data"
     if features.rsi is None or features.atr is None or features.macd_hist is None:
         return "insufficient_history"

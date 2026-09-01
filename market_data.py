@@ -15,14 +15,16 @@ from alpaca.data.enums import DataFeed
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
+import settings
+
 STOCK_FEED = DataFeed.IEX
 DEFAULT_LOOKBACK_BARS = 150  # enough warmup for MACD(12/26/9) and Wilder smoothing
 
-_TIMEFRAME_UNITS = {
-    "m": (TimeFrameUnit.Minute, 60),
-    "h": (TimeFrameUnit.Hour, 3600),
-    "d": (TimeFrameUnit.Day, 86400),
-    "w": (TimeFrameUnit.Week, 7 * 86400),
+_SDK_UNITS = {
+    "m": TimeFrameUnit.Minute,
+    "h": TimeFrameUnit.Hour,
+    "d": TimeFrameUnit.Day,
+    "w": TimeFrameUnit.Week,
 }
 
 
@@ -32,17 +34,10 @@ class MarketDataError(Exception):
 
 def parse_timeframe(raw: str) -> tuple[int, str, int]:
     """'15m' -> (15, 'm', 900). Raises MarketDataError on anything unrecognized."""
-    text = raw.strip().lower()
-    if len(text) < 2 or text[-1] not in _TIMEFRAME_UNITS or not text[:-1].isdigit():
-        raise MarketDataError(f"timeframe must look like 5m/15m/1h/1d/1w, got {raw!r}")
-    amount = int(text[:-1])
-    if amount < 1:
-        raise MarketDataError("timeframe amount must be at least 1")
-    return amount, text[-1], amount * _TIMEFRAME_UNITS[text[-1]][1]
-
-
-def bar_seconds_of(timeframe: str) -> int:
-    return parse_timeframe(timeframe)[2]
+    try:
+        return settings.parse_timeframe(raw)
+    except settings.SettingsError as error:
+        raise MarketDataError(str(error)) from None
 
 
 def fetch_ohlcv(
@@ -64,7 +59,7 @@ def fetch_ohlcv(
     window = timedelta(seconds=seconds * (lookback_bars + 2) * 5) + timedelta(days=3)
     request = StockBarsRequest(
         symbol_or_symbols=symbol,
-        timeframe=TimeFrame(amount, _TIMEFRAME_UNITS[unit][0]),
+        timeframe=TimeFrame(amount, _SDK_UNITS[unit]),
         start=now - window,
         feed=STOCK_FEED,
     )

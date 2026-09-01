@@ -27,18 +27,16 @@ from alpaca.trading.requests import (
     OptionLegRequest,
 )
 
-import market_data
 import positions as positions_mod
+import settings
 from models import AccountState, Clock, Config, LegPosition, LegQuote, OrderPlan, OrderReceipt
 
-DEFAULT_SYMBOLS = "SPY,QQQ,IWM,AAPL,NVDA,TSLA,MSFT,AMZN"
-DEFAULT_BAR_TIMEFRAME = "15m"
+# Plumbing constants — not trader knobs, so not in settings.yaml.
 STOCK_FEED = DataFeed.IEX
 OPTION_FEED = OptionsFeed.INDICATIVE  # explicit: the SDK default varies by subscription
 SNAPSHOT_BATCH = 100
 CONTRACT_PAGE_LIMIT = 1000
 MAX_CONTRACT_PAGES = 5
-MAX_EXPIRY_LOOKAHEAD_DAYS = 45
 
 _LIVE_FLAG_VARS = ("ALPACA_LIVE", "ALPACA_LIVE_TRADING", "APCA_LIVE")
 _ENDPOINT_VARS = ("ALPACA_BASE_URL", "ALPACA_API_BASE_URL", "APCA_API_BASE_URL", "ALPACA_ENDPOINT")
@@ -78,6 +76,7 @@ def find_live_trading_signals(env: dict[str, str]) -> list[str]:
 
 
 def load_config(env: dict[str, str] | None = None) -> Config:
+    """Credentials + paper guards from env; strategy values come from settings.yaml."""
     env = dict(os.environ) if env is None else env
     live = find_live_trading_signals(env)
     if live:
@@ -90,24 +89,13 @@ def load_config(env: dict[str, str] | None = None) -> Config:
     secret_key = env.get("ALPACA_SECRET_KEY", "").strip()
     if not api_key or not secret_key:
         raise ConfigError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
-    symbols = tuple(dict.fromkeys(
-        s.strip().upper() for s in env.get("SYMBOLS", DEFAULT_SYMBOLS).split(",") if s.strip()
-    ))
-    if not symbols:
-        raise ConfigError("SYMBOLS must contain at least one symbol")
-    try:
-        amount, unit, seconds = market_data.parse_timeframe(env.get("BAR_TIMEFRAME", DEFAULT_BAR_TIMEFRAME))
-    except market_data.MarketDataError as error:
-        raise ConfigError(f"BAR_TIMEFRAME: {error}") from None
     openrouter = env.get("OPENROUTER_API_KEY", "").strip() or None
     return Config(
         api_key=api_key,
         secret_key=secret_key,
-        symbols=symbols,
-        bar_timeframe=env.get("BAR_TIMEFRAME", DEFAULT_BAR_TIMEFRAME).strip(),
-        bar_amount=amount,
-        bar_unit=unit,
-        bar_seconds=seconds,
+        symbols=settings.SYMBOLS,
+        bar_timeframe=settings.BAR_TIMEFRAME,
+        bar_seconds=settings.BAR_SECONDS,
         openrouter_api_key=openrouter,
     )
 
@@ -221,10 +209,8 @@ def fetch_contracts(
     trading: Any, underlying: str, direction: str, spot: float, today: date
 ) -> dict[date, dict[float, dict]]:
     """Active contracts by expiration then strike: {exp: {strike: {symbol, open_interest}}}."""
-    import options_screener
-
     contract_type = ContractType.CALL if direction == "CALL" else ContractType.PUT
-    band = options_screener.STRIKE_BAND_PCT
+    band = settings.STRIKE_BAND_PCT
     by_expiry: dict[date, dict[float, dict]] = {}
     page_token = None
     for _ in range(MAX_CONTRACT_PAGES):
@@ -232,8 +218,8 @@ def fetch_contracts(
             underlying_symbols=[underlying],
             root_symbol=underlying,
             type=contract_type,
-            expiration_date_gte=today + timedelta(days=options_screener.MIN_DTE),
-            expiration_date_lte=today + timedelta(days=MAX_EXPIRY_LOOKAHEAD_DAYS),
+            expiration_date_gte=today + timedelta(days=settings.MIN_DTE),
+            expiration_date_lte=today + timedelta(days=settings.MAX_EXPIRY_LOOKAHEAD_DAYS),
             strike_price_gte=str(round(spot * (1 - band), 2)),
             strike_price_lte=str(round(spot * (1 + band), 2)),
             limit=CONTRACT_PAGE_LIMIT,

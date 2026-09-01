@@ -23,6 +23,7 @@ import decision_layer
 import market_data
 import options_screener
 import positions as positions_mod
+import settings
 import signals
 from models import Config, EntryChoice, OrderPlan, SpreadQuote, SymbolFeatures, to_json_line
 
@@ -310,7 +311,7 @@ def _attempt_entry(
             entry["rejected"] = f"recheck: {failure}"
             return entry
     fresh_debit = round(long_q.ask - short_q.bid, 2)  # type: ignore[operator]
-    if not (options_screener.MIN_NET_DEBIT <= fresh_debit < spread.width):
+    if not (settings.MIN_NET_DEBIT <= fresh_debit < spread.width):
         entry["rejected"] = "recheck: bad_debit"
         return entry
     qty, reason = positions_mod.size_entry(fresh_debit, fresh_account.equity, open_risk, cycle_spent=0.0)
@@ -348,7 +349,9 @@ def run(
     execute: bool = typer.Option(False, help="Actually submit paper orders (dry run otherwise)."),
     manual_mode: bool = typer.Option(False, help="Pick the entry candidate yourself instead of asking the LLM."),
     loop: bool = typer.Option(False, help="Run forever on an interval."),
-    interval: int = typer.Option(900, help="Seconds between cycles with --loop."),
+    interval: int = typer.Option(
+        settings.LOOP_INTERVAL_SECONDS, help="Seconds between cycles with --loop."
+    ),
 ) -> None:
     """Run one trading cycle (or loop). Paper only; dry run unless --execute."""
     setup_logging()
@@ -361,6 +364,37 @@ def run(
         if not loop:
             break
         time.sleep(interval)
+
+
+@app.command()
+def preflight() -> None:
+    """Pre-flight smoke test: settings.yaml, credentials + paper guards, connectivity."""
+    setup_logging()
+    try:
+        values = settings.load_settings()
+    except settings.SettingsError as error:
+        typer.echo(f"FAIL settings.yaml: {error}")
+        raise typer.Exit(1)
+    typer.echo(f"OK   settings.yaml — all {len(values)} required values present and sane:")
+    for name in sorted(values):
+        typer.echo(f"       {name} = {values[name]}")
+
+    try:
+        config = broker.load_config()
+    except broker.ConfigError as error:
+        typer.echo(f"FAIL credentials: {error}")
+        raise typer.Exit(1)
+    typer.echo("OK   credentials + paper-only guards (.env)")
+
+    try:
+        trading, _, _ = broker.build_clients(config)
+        clock = broker.fetch_clock(trading)
+    except broker.BrokerError as error:
+        typer.echo(f"FAIL Alpaca connectivity: {error}")
+        raise typer.Exit(1)
+    state = "open" if clock.is_open else "closed"
+    typer.echo(f"OK   Alpaca connectivity — market {state}, server time {clock.server_time}")
+    typer.echo("preflight passed")
 
 
 @app.command()

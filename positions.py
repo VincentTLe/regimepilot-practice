@@ -11,17 +11,10 @@ import math
 import re
 from datetime import date, datetime
 
+import settings
 from models import ExitDecision, LegPosition, LegQuote, OpenSpread
 
-# Mechanical exit thresholds (approved 2026-08-31).
-STOP_FRACTION = 0.5  # exit when net mark <= 50% of entry debit (-50%)
-TAKE_PROFIT_MULT = 2.0  # exit when net mark >= 200% of entry debit (+100%)
-EXIT_DTE = 2  # exit at or below this many days to expiration, regardless of marks
-
-# Equity-relative risk caps (approved 2026-08-31).
-PER_ENTRY_FRACTION = 0.005  # each entry's total debit <= 0.5% of equity
-PER_CYCLE_FRACTION = 0.01  # new premium per cycle <= 1% of equity
-TOTAL_FRACTION = 0.10  # total open premium at risk <= 10% of equity
+# Exit thresholds and risk caps live in settings.yaml (approved 2026-08-31).
 
 _OCC = re.compile(r"^([A-Z]{1,6})(\d{6})([CP])(\d{8})$")
 
@@ -90,12 +83,12 @@ def exit_decision(
 ) -> ExitDecision | None:
     """Mechanical exit verdict for one open spread, or None to keep holding.
 
-    Expiry (DTE <= EXIT_DTE) always exits, even on missing marks. Stop and
+    Expiry (DTE <= settings.EXIT_DTE) always exits, even on missing marks. Stop and
     take-profit need both a known entry debit and fresh two-sided marks; when
     either is unknown we hold and let the caller log the gap rather than guess.
     """
     dte = (spread.expiration - today).days
-    if dte <= EXIT_DTE:
+    if dte <= settings.EXIT_DTE:
         net_mark = _net_mark(long_quote, short_quote)
         return ExitDecision(spread=spread, reason="expiry", net_mark=net_mark)
     if spread.net_entry_debit is None:
@@ -103,9 +96,9 @@ def exit_decision(
     net_mark = _net_mark(long_quote, short_quote)
     if net_mark is None:
         return None
-    if net_mark <= STOP_FRACTION * spread.net_entry_debit:
+    if net_mark <= settings.STOP_FRACTION * spread.net_entry_debit:
         return ExitDecision(spread=spread, reason="stop", net_mark=net_mark)
-    if net_mark >= TAKE_PROFIT_MULT * spread.net_entry_debit:
+    if net_mark >= settings.TAKE_PROFIT_MULT * spread.net_entry_debit:
         return ExitDecision(spread=spread, reason="take_profit", net_mark=net_mark)
     return None
 
@@ -145,9 +138,9 @@ def size_entry(
         return 0, "unknown_open_risk"
     if net_debit <= 0:
         return 0, "bad_debit"
-    per_entry_cap = PER_ENTRY_FRACTION * equity
-    cycle_room = PER_CYCLE_FRACTION * equity - cycle_spent
-    total_room = TOTAL_FRACTION * equity - open_risk - cycle_spent
+    per_entry_cap = settings.PER_ENTRY_FRACTION * equity
+    cycle_room = settings.PER_CYCLE_FRACTION * equity - cycle_spent
+    total_room = settings.TOTAL_FRACTION * equity - open_risk - cycle_spent
     cap = min(per_entry_cap, cycle_room, total_room)
     qty = math.floor(cap / (net_debit * 100.0))
     if qty < 1:

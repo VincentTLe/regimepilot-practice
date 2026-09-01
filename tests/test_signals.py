@@ -121,7 +121,9 @@ def test_build_signal_full_history():
 
 
 def test_build_signal_short_history_has_no_indicators():
-    df = signals.add_indicators(frame(quiet_rows(signals.MIN_BARS - 1)))
+    import settings
+
+    df = signals.add_indicators(frame(quiet_rows(settings.MIN_BARS - 1)))
     features = signals.build_signal("SPY", df, 100.0, NOW, BAR_SECONDS)
     assert features.rsi is None and features.events == ()
 

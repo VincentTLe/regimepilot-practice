@@ -40,12 +40,27 @@ Each box in the diagram is one module:
 | Risk manager + Position manager | `positions.py` | leg pairing, mechanical exits, equity-relative sizing (pure) |
 | Execution + Account state | `broker.py` | all env/Alpaca access; `submit_paper_order` is the only submitting function |
 | wiring | `cli.py` | typer CLI + the cycle engine + loguru logging + JSONL journal |
+| — | `settings.yaml` + `settings.py` | every trader-tunable value in one validated file |
 | — | `models.py` | frozen dataclasses shared by everything |
+
+## Settings — the one file a trader edits
+
+**`settings.yaml`** holds every tunable: the symbol whitelist, bar timeframe, TA
+parameters and event trigger, screener thresholds, risk caps, stop/take-profit
+levels, and the LLM models. Each value carries a comment saying what it does.
+Edit, save, restart — nothing else to hunt down.
+
+Every key is validated at startup (and by `cli.py preflight`): a missing key, a
+typo'd key, a wrong type, or an out-of-range value stops the program naming the
+exact key (e.g. `settings.yaml: exits.stop_fraction: must be in (0, 1), got 5`).
+`.env` holds only credentials and the paper flag — secrets and strategy never mix.
 
 ## Methodology (approved 2026-08-31)
 
-- **Whitelist** (`SYMBOLS` env): SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN by default.
-- **Signals**: OHLCV bars at the configured `BAR_TIMEFRAME` (default 15m, one
+All numbers below are the shipped `settings.yaml` defaults — change them there.
+
+- **Whitelist** (`symbols` in settings.yaml): SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN by default.
+- **Signals**: OHLCV bars at the configured `bar_timeframe` (default 15m, one
   fetch per symbol) drive RSI(14), ATR(14) and MACD(12/26/9). A symbol is a
   candidate only when at least one **event** fired on the latest completed bar:
   gap (|open − prior close| > 2×ATR), breakout (|close − open| > 2×ATR), or the
@@ -100,14 +115,16 @@ cp .env.example .env   # then paste your PAPER keys into .env
 ```
 
 `.env` is git-ignored and never read by the code itself — pass it with
-`uv run --env-file .env`. Optional env: `SYMBOLS`, `BAR_TIMEFRAME`,
-`OPENROUTER_API_KEY` (for LLM decisions; use `--manual-mode` without one).
+`uv run --env-file .env`. It holds only credentials: the Alpaca paper keys and
+optionally `OPENROUTER_API_KEY` (for LLM decisions; use `--manual-mode` without
+one). Strategy values live in `settings.yaml` (see Settings above).
 
 ## Run
 
 ```bash
 uv run pytest                                   # no credentials, no network
 
+uv run --env-file .env cli.py preflight                        # settings + credentials + connectivity check
 uv run --env-file .env cli.py account                          # account state (read-only)
 uv run --env-file .env cli.py candidates                       # scored whitelist (read-only)
 uv run --env-file .env cli.py screen SPY --direction CALL      # what spread would be picked
@@ -133,24 +150,28 @@ Nothing here submits an order.
 # 1. Unit tests — pure logic, no credentials needed
 uv run pytest
 
-# 2. Account state — proves your keys work and shows equity + options level
+# 2. Preflight — validates every settings.yaml value, the credentials + paper
+#    guards in .env, and Alpaca connectivity, in one shot
+uv run --env-file .env cli.py preflight
+
+# 3. Account state — shows equity + options level
 #    (options_trading_level must be >= 3 to trade spreads later)
 uv run --env-file .env cli.py account
 
-# 3. Trading signals — RSI/ATR/MACD and fired events per whitelisted symbol.
+# 4. Trading signals — RSI/ATR/MACD and fired events per whitelisted symbol.
 #    On a calm bar most symbols show gate=no_event; that is the normal idle state.
 uv run --env-file .env cli.py candidates
 
-# 4. Option screener — the exact spread that would be picked for one symbol.
+# 5. Option screener — the exact spread that would be picked for one symbol.
 #    Also confirms the options feed returns implied volatility (a missing_iv
 #    rejection count here means the feed has no IV and nothing can be ranked).
 uv run --env-file .env cli.py screen SPY --direction CALL
 
-# 5. Full dry-run cycle — exits evaluated, signals built, you pick a candidate
+# 6. Full dry-run cycle — exits evaluated, signals built, you pick a candidate
 #    (or press Enter to pass), spread screened, risk-sized... but NOT submitted.
 uv run --env-file .env cli.py run --manual-mode
 
-# 6. Inspect the journal record the cycle just wrote
+# 7. Inspect the journal record the cycle just wrote
 tail -1 logs/cycles.jsonl
 ```
 

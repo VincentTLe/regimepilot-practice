@@ -13,26 +13,21 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import settings
 from models import LegPlan, LegQuote, OpenSpread, OrderPlan, SpreadQuote
 
-MIN_DTE = 5
-STRIKE_BAND_PCT = 0.10  # candidate strikes within +/-10% of spot
-MAX_WIDTH_STEPS = 3  # spread width of 1..3 strike steps
-MIN_OPEN_INTEREST = 100
-MAX_QUOTE_AGE_SECONDS = 10.0  # vs the broker's server clock
-MAX_LEG_SPREAD_BPS = 350.0
-MIN_NET_DEBIT = 0.05
+# All thresholds live in settings.yaml (screener section).
 
 
 def pick_expiration(expirations: set[date], today: date) -> date | None:
-    """Nearest listed expiry at least MIN_DTE days out; None when there is none."""
-    eligible = [exp for exp in expirations if (exp - today).days >= MIN_DTE]
+    """Nearest listed expiry at least settings.MIN_DTE days out; None when there is none."""
+    eligible = [exp for exp in expirations if (exp - today).days >= settings.MIN_DTE]
     return min(eligible) if eligible else None
 
 
 def check_leg(leg: LegQuote, server_time: datetime) -> str | None:
     """First failing liquidity/quality rule for one leg, or None when acceptable."""
-    if leg.open_interest is None or leg.open_interest < MIN_OPEN_INTEREST:
+    if leg.open_interest is None or leg.open_interest < settings.MIN_OPEN_INTEREST:
         return "low_open_interest"
     if leg.bid is None or leg.ask is None or leg.quote_time is None:
         return "no_quote"
@@ -41,10 +36,10 @@ def check_leg(leg: LegQuote, server_time: datetime) -> str | None:
     age = server_time.timestamp() - leg.quote_time.timestamp()
     if age < 0:
         return "future_quote"
-    if age > MAX_QUOTE_AGE_SECONDS:
+    if age > settings.MAX_QUOTE_AGE_SECONDS:
         return "stale_quote"
     mid = (leg.bid + leg.ask) / 2
-    if mid <= 0 or (leg.ask - leg.bid) / mid * 10_000 > MAX_LEG_SPREAD_BPS:
+    if mid <= 0 or (leg.ask - leg.bid) / mid * 10_000 > settings.MAX_LEG_SPREAD_BPS:
         return "wide_spread"
     if leg.implied_vol is None or leg.implied_vol <= 0:
         return "missing_iv"
@@ -63,9 +58,9 @@ def enumerate_spreads(
 
     Bull call: long the lower strike, short the higher. Bear put: long the
     higher strike, short the lower. Both legs must sit inside the strike band
-    and pass check_leg; the spread must price sanely (MIN_NET_DEBIT <= debit < width).
+    and pass check_leg; the spread must price sanely (settings.MIN_NET_DEBIT <= debit < width).
     """
-    lo, hi = spot * (1 - STRIKE_BAND_PCT), spot * (1 + STRIKE_BAND_PCT)
+    lo, hi = spot * (1 - settings.STRIKE_BAND_PCT), spot * (1 + settings.STRIKE_BAND_PCT)
     strikes = sorted(strike for strike in quotes_by_strike if lo <= strike <= hi)
     rejections: dict[str, int] = {}
 
@@ -81,7 +76,7 @@ def enumerate_spreads(
 
     spreads: list[SpreadQuote] = []
     for i, lower in enumerate(strikes):
-        for step in range(1, MAX_WIDTH_STEPS + 1):
+        for step in range(1, settings.MAX_WIDTH_STEPS + 1):
             if i + step >= len(strikes):
                 break
             higher = strikes[i + step]
@@ -93,7 +88,7 @@ def enumerate_spreads(
                 long_leg, short_leg = quotes_by_strike[higher], quotes_by_strike[lower]
             width = higher - lower
             net_debit = round(long_leg.ask - short_leg.bid, 2)  # type: ignore[operator]
-            if not (MIN_NET_DEBIT <= net_debit < width):
+            if not (settings.MIN_NET_DEBIT <= net_debit < width):
                 _reject("bad_debit")
                 continue
             skew = abs(short_leg.implied_vol - long_leg.implied_vol)  # type: ignore[operator]

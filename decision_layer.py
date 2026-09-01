@@ -13,12 +13,12 @@ from typing import Callable
 
 import httpx
 
+import settings
 from models import EntryChoice, SymbolFeatures
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-PRIMARY_MODEL = "z-ai/glm-5.3-flash"
-FALLBACK_MODELS = ("minimax/minimax-m3:free", "nvidia/nemotron-3-super-120b-a12b:free")
 TIMEOUT_SECONDS = 60.0
+# Model choice lives in settings.yaml (llm section).
 
 SYSTEM_PROMPT = """You are the entry-signal module of a paper-trading agent that buys
 debit vertical spreads on liquid US options. Every candidate underlying has fired
@@ -50,8 +50,8 @@ def call_openrouter(
 ) -> tuple[str, str]:
     """POST to OpenRouter; returns (content, model_used). Raises LlmError."""
     payload = {
-        "model": PRIMARY_MODEL,
-        "models": [PRIMARY_MODEL, *FALLBACK_MODELS],
+        "model": settings.PRIMARY_MODEL,
+        "models": [settings.PRIMARY_MODEL, *settings.FALLBACK_MODELS],
         "messages": messages,
         "response_format": {"type": "json_object"},
     }
@@ -69,7 +69,7 @@ def call_openrouter(
     try:
         body = response.json()
         content = body["choices"][0]["message"]["content"]
-        model_used = body.get("model", PRIMARY_MODEL)
+        model_used = body.get("model", settings.PRIMARY_MODEL)
         if not isinstance(content, str) or not isinstance(model_used, str):
             raise TypeError
     except Exception:

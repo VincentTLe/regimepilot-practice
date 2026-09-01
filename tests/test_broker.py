@@ -58,14 +58,12 @@ def test_config_repr_never_leaks_credentials():
         assert API_KEY not in text and SECRET not in text
 
 
-def test_symbols_parse_dedupes_and_uppercases():
-    config = broker.load_config(env(SYMBOLS=" spy, qqq ,SPY,nvda "))
-    assert config.symbols == ("SPY", "QQQ", "NVDA")
+def test_config_strategy_values_come_from_settings():
+    import settings
 
-
-def test_bad_bar_timeframe_is_a_config_error():
-    with pytest.raises(broker.ConfigError):
-        broker.load_config(env(BAR_TIMEFRAME="fifteen"))
+    config = broker.load_config(env())
+    assert config.symbols == settings.SYMBOLS
+    assert config.bar_seconds == settings.BAR_SECONDS
 
 
 # --- account state ---
