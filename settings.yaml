@@ -34,8 +34,8 @@ screener:                    # which vertical spreads are even considered
   min_net_debit: 0.05        # ignore junk spreads cheaper than this ($ per share)
 
 risk:                        # position sizing — all fractions of LIVE account equity
-  per_entry_fraction: 0.01  # one entry's total debit <= this fraction (0.005 = $500 on $100k)
-  per_underlying_fraction: 0.02   # open premium at risk on ONE underlying <= this fraction (0.02 = $2k on $100k)
+  per_entry_fraction: 0.005  # one entry's total debit <= this fraction (0.005 = $500 on $100k)
+  per_underlying_fraction: 0.015   # open premium at risk on ONE underlying <= this fraction (0.02 = $2k on $100k)
   per_cycle_fraction: 0.01   # new premium per cycle <= this fraction of equity
   total_fraction: 0.10       # total open premium at risk <= this fraction of equity
 
