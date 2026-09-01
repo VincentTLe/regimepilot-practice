@@ -13,8 +13,8 @@ spreads** as single multi-leg (MLEG) limit orders. Exits are purely mechanical.
 
 ```mermaid
 flowchart TB
-    ES["Entry signal<br/><i>decides when to trade</i><br/>market_data.py + signals.py + llm.py"]
-    OS["Option screener<br/><i>finds & filters contracts</i><br/>screener.py"]
+    ES["Entry signal<br/><i>decides when to trade</i><br/>market_data.py + signals.py + decision_layer.py"]
+    OS["Option screener<br/><i>finds & filters contracts</i><br/>options_screener.py"]
     RM["Risk manager<br/><i>position size & risk limit</i><br/>positions.py"]
     EX["Execution<br/><i>places order via Alpaca</i><br/>broker.py"]
     AS["Account state<br/><i>positions + balance</i><br/>broker.py"]
@@ -35,8 +35,8 @@ Each box in the diagram is one module:
 |---|---|---|
 | Entry signal (market data) | `market_data.py` | OHLCV DataFrame for one symbol at a time, any bar timeframe |
 | Entry signal (analysis) | `signals.py` | RSI/ATR/MACD + event detection (gap, breakout, MACD cross) + entry gates (pure) |
-| Entry signal (decision) | `llm.py` | LLM (OpenRouter) or `--stub` rule picks ≤1 entry from the event-firing candidates |
-| Option screener | `screener.py` | expiry pick, spread enumeration, liquidity filter, IV-skew ranking, order plans (pure) |
+| Entry signal (decision) | `decision_layer.py` | LLM (OpenRouter) — or you, with `--manual-mode` — picks ≤1 entry from the event-firing candidates |
+| Option screener | `options_screener.py` | expiry pick, spread enumeration, liquidity filter, IV-skew ranking, order plans (pure) |
 | Risk manager + Position manager | `positions.py` | leg pairing, mechanical exits, equity-relative sizing (pure) |
 | Execution + Account state | `broker.py` | all env/Alpaca access; `submit_paper_order` is the only submitting function |
 | wiring | `cli.py` | typer CLI + the cycle engine + loguru logging + JSONL journal |
@@ -101,7 +101,7 @@ cp .env.example .env   # then paste your PAPER keys into .env
 
 `.env` is git-ignored and never read by the code itself — pass it with
 `uv run --env-file .env`. Optional env: `SYMBOLS`, `BAR_TIMEFRAME`,
-`OPENROUTER_API_KEY` (for LLM decisions; use `--stub` without one).
+`OPENROUTER_API_KEY` (for LLM decisions; use `--manual-mode` without one).
 
 ## Run
 
@@ -112,8 +112,8 @@ uv run --env-file .env python cli.py account                          # account 
 uv run --env-file .env python cli.py candidates                       # scored whitelist (read-only)
 uv run --env-file .env python cli.py screen SPY --direction CALL      # what spread would be picked
 
-uv run --env-file .env python cli.py run --stub                       # one cycle, dry run
-uv run --env-file .env python cli.py run --stub --execute             # one cycle, real PAPER order
+uv run --env-file .env python cli.py run --manual-mode                # one cycle, dry run, you pick the entry
+uv run --env-file .env python cli.py run --manual-mode --execute      # one cycle, real PAPER order
 uv run --env-file .env python cli.py run --execute --loop             # autonomous, LLM, every 15 min
 ```
 

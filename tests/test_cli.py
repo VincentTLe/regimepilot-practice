@@ -1,3 +1,4 @@
+import itertools
 import json
 from datetime import date, timedelta
 
@@ -31,6 +32,13 @@ def journal(tmp_path, monkeypatch):
     return path
 
 
+@pytest.fixture(autouse=True)
+def manual_answers(monkeypatch):
+    """manual_mode prompts: always pick candidate 1 and accept the default direction."""
+    answers = itertools.cycle(["1", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+
+
 def make_config(symbols="SPY"):
     return broker.load_config(
         {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "ALPACA_PAPER": "true",
@@ -57,7 +65,8 @@ def entry_contracts():
 def make_clients(**trading_kwargs):
     trading = FakeTradingClient(contracts=entry_contracts(), **trading_kwargs)
     stock = FakeStockDataClient(
-        bars_by_symbol={"SPY": breakout_bars()},  # last bar body +5 vs ATR ~1 -> breakout_up
+        # last bar body +5 vs ATR ~1 -> breakout_up; manual_answers picks it, default CALL
+        bars_by_symbol={"SPY": breakout_bars()},
         quotes_by_symbol={"SPY": (649.9, 650.1)},
     )
     options = FakeOptionDataClient(entry_chain_snapshots())
@@ -66,7 +75,7 @@ def make_clients(**trading_kwargs):
 
 def test_dry_run_cycle_plans_entry_but_submits_nothing(journal):
     trading, stock, options = make_clients()
-    record = cli.run_cycle(make_config(), trading, stock, options, execute=False, use_stub=True)
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=False, manual_mode=True)
     assert trading.submitted == []  # the core safety property of a dry run
     assert record["outcome"] == "planned"
     entry = record["entry"]
@@ -82,7 +91,7 @@ def test_dry_run_cycle_plans_entry_but_submits_nothing(journal):
 
 def test_execute_cycle_submits_one_mleg_order():
     trading, stock, options = make_clients()
-    record = cli.run_cycle(make_config(), trading, stock, options, execute=True, use_stub=True)
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=True, manual_mode=True)
     assert record["outcome"] == "submitted"
     assert len(trading.submitted) == 1
     request = trading.submitted[0]
@@ -92,7 +101,7 @@ def test_execute_cycle_submits_one_mleg_order():
 
 def test_market_closed_does_nothing():
     trading, stock, options = make_clients(clock=fake_clock(is_open=False))
-    record = cli.run_cycle(make_config(), trading, stock, options, execute=True, use_stub=True)
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=True, manual_mode=True)
     assert record["outcome"] == "market_closed"
     assert trading.submitted == [] and "entry" not in record
 
@@ -106,7 +115,7 @@ def test_stale_quote_on_presubmit_recheck_aborts_entry():
         for symbol, snap in entry_chain_snapshots().items()
     }
     options = FakeOptionDataClient([fresh, stale])  # screen sees fresh, recheck sees stale
-    record = cli.run_cycle(make_config(), trading, stock, options, execute=True, use_stub=True)
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=True, manual_mode=True)
     assert trading.submitted == []
     assert record["entry"]["rejected"] == "recheck: stale_quote"
 
@@ -126,7 +135,7 @@ def test_stop_loss_exit_is_planned_and_underlying_blocked():
         bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
     )
     record = cli.run_cycle(
-        make_config(), trading, stock, FakeOptionDataClient(marks), execute=False, use_stub=True
+        make_config(), trading, stock, FakeOptionDataClient(marks), execute=False, manual_mode=True
     )
     assert record["exits"][0]["reason"] == "stop"
     assert record["exits"][0]["receipt"]["dry_run"] is True
@@ -150,7 +159,7 @@ def test_pending_order_on_leg_skips_exit():
         bars_by_symbol={"SPY": quiet_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
     )
     record = cli.run_cycle(
-        make_config(), trading, stock, FakeOptionDataClient(marks), execute=True, use_stub=True
+        make_config(), trading, stock, FakeOptionDataClient(marks), execute=True, manual_mode=True
     )
     assert record["exits"][0]["skipped"] == "pending_order"
     assert trading.submitted == []
@@ -162,7 +171,7 @@ def test_unpaired_leg_is_warned_and_untouched():
         bars_by_symbol={"SPY": quiet_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
     )
     record = cli.run_cycle(
-        make_config(), trading, stock, FakeOptionDataClient({}), execute=True, use_stub=True
+        make_config(), trading, stock, FakeOptionDataClient({}), execute=True, manual_mode=True
     )
     assert any("unpaired" in w for w in record["warnings"])
     assert record["exits"] == [] and trading.submitted == []
@@ -172,7 +181,7 @@ def test_options_level_below_3_blocks_armed_entry():
     from tests.fakes import fake_account
 
     trading, stock, options = make_clients(account=fake_account(level=2))
-    record = cli.run_cycle(make_config(), trading, stock, options, execute=True, use_stub=True)
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=True, manual_mode=True)
     assert record["entry"]["rejected"] == "options_level_too_low"
     assert trading.submitted == []
 

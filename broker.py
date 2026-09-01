@@ -221,10 +221,10 @@ def fetch_contracts(
     trading: Any, underlying: str, direction: str, spot: float, today: date
 ) -> dict[date, dict[float, dict]]:
     """Active contracts by expiration then strike: {exp: {strike: {symbol, open_interest}}}."""
-    import screener
+    import options_screener
 
     contract_type = ContractType.CALL if direction == "CALL" else ContractType.PUT
-    band = screener.STRIKE_BAND_PCT
+    band = options_screener.STRIKE_BAND_PCT
     by_expiry: dict[date, dict[float, dict]] = {}
     page_token = None
     for _ in range(MAX_CONTRACT_PAGES):
@@ -232,7 +232,7 @@ def fetch_contracts(
             underlying_symbols=[underlying],
             root_symbol=underlying,
             type=contract_type,
-            expiration_date_gte=today + timedelta(days=screener.MIN_DTE),
+            expiration_date_gte=today + timedelta(days=options_screener.MIN_DTE),
             expiration_date_lte=today + timedelta(days=MAX_EXPIRY_LOOKAHEAD_DAYS),
             strike_price_gte=str(round(spot * (1 - band), 2)),
             strike_price_lte=str(round(spot * (1 + band), 2)),

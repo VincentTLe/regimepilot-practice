@@ -19,10 +19,10 @@ import typer
 from loguru import logger
 
 import broker
-import llm
+import decision_layer
 import market_data
+import options_screener
 import positions as positions_mod
-import screener
 import signals
 from models import Config, EntryChoice, OrderPlan, SpreadQuote, SymbolFeatures, to_json_line
 
@@ -60,7 +60,7 @@ def _screen_spread(
 ) -> tuple[SpreadQuote | None, dict]:
     """Fetch chain + snapshots for one underlying and pick the best spread."""
     by_expiry = broker.fetch_contracts(trading, underlying, direction, spot, today)
-    expiration = screener.pick_expiration(set(by_expiry), today)
+    expiration = options_screener.pick_expiration(set(by_expiry), today)
     if expiration is None:
         return None, {"no_expiration": 1}
     contracts = by_expiry[expiration]
@@ -73,7 +73,7 @@ def _screen_spread(
         )
         for strike, info in contracts.items()
     }
-    return screener.select_spread(
+    return options_screener.select_spread(
         quotes_by_strike, direction, spot, expiration, underlying, clock_time
     )
 
@@ -85,7 +85,7 @@ def run_cycle(
     option_data: object,
     *,
     execute: bool,
-    use_stub: bool,
+    manual_mode: bool,
     llm_transport: object | None = None,
 ) -> dict:
     """One full cycle. Returns the journal record (also appended to the journal)."""
@@ -149,7 +149,7 @@ def run_cycle(
             if {spread.long_symbol, spread.short_symbol} & account.open_order_symbols:
                 entry["skipped"] = "pending_order"
             else:
-                plan = screener.build_exit_plan(spread, long_q, short_q, cycle_id)
+                plan = options_screener.build_exit_plan(spread, long_q, short_q, cycle_id)
                 if plan is None:
                     entry["skipped"] = "no_quote"
                 else:
@@ -168,7 +168,7 @@ def run_cycle(
         append_journal(record)
         return record
 
-    features = _build_features(config, stock_data, mids, clock.server_time)
+    features = _build_trading_signals(config, stock_data, mids, clock.server_time)
     busy = {s.underlying for s in spreads} | {
         positions_mod.parse_occ(sym)[0]
         for sym in account.open_order_symbols
@@ -190,7 +190,7 @@ def run_cycle(
 
     # --- Decision + screener + risk + execution ---
     record["entry"] = None
-    choice = _decide(tradeable, config, use_stub, llm_transport) if tradeable else None
+    choice = _decide(tradeable, config, manual_mode, llm_transport) if tradeable else None
     if choice is not None:
         record["entry"] = _attempt_entry(
             choice, features[choice.symbol].mid, config, trading, option_data,
@@ -205,10 +205,10 @@ def run_cycle(
     return record
 
 
-def _build_features(
+def _build_trading_signals(
     config: Config, stock_data: object, mids: dict, now: datetime
 ) -> dict[str, SymbolFeatures]:
-    """One OHLCV fetch + indicator pass per whitelisted symbol.
+    """Create the trading signals: OHLCV -> RSI/ATR/MACD -> events, per whitelisted symbol.
 
     A failed symbol is marked data_error and skipped, never invented — one bad
     symbol must not kill the cycle.
@@ -230,16 +230,16 @@ def _build_features(
     return features
 
 
-def _decide(tradeable, config: Config, use_stub: bool, llm_transport) -> EntryChoice | None:
-    if use_stub:
-        choice = llm.stub_decide(tradeable)
+def _decide(tradeable, config: Config, manual_mode: bool, llm_transport) -> EntryChoice | None:
+    if manual_mode:
+        choice = decision_layer.manual_decide(tradeable)
     else:
         if not config.openrouter_api_key:
-            logger.error("OPENROUTER_API_KEY missing; use --stub or set the key")
+            logger.error("OPENROUTER_API_KEY missing; use --manual-mode or set the key")
             return None
         try:
-            choice = llm.decide_entry(tradeable, config.openrouter_api_key, transport=llm_transport)
-        except llm.LlmError as error:
+            choice = decision_layer.decide_entry(tradeable, config.openrouter_api_key, transport=llm_transport)
+        except decision_layer.LlmError as error:
             logger.error("LLM decision failed, holding: {}", error)
             return None
     if choice:
@@ -305,12 +305,12 @@ def _attempt_entry(
     long_q = broker.leg_quote_from_snapshot(spread.long.symbol, spread.long.strike, fresh_snaps.get(spread.long.symbol), spread.long.open_interest)
     short_q = broker.leg_quote_from_snapshot(spread.short.symbol, spread.short.strike, fresh_snaps.get(spread.short.symbol), spread.short.open_interest)
     for leg in (long_q, short_q):
-        failure = screener.check_leg(leg, fresh_clock.server_time)
+        failure = options_screener.check_leg(leg, fresh_clock.server_time)
         if failure is not None:
             entry["rejected"] = f"recheck: {failure}"
             return entry
     fresh_debit = round(long_q.ask - short_q.bid, 2)  # type: ignore[operator]
-    if not (screener.MIN_NET_DEBIT <= fresh_debit < spread.width):
+    if not (options_screener.MIN_NET_DEBIT <= fresh_debit < spread.width):
         entry["rejected"] = "recheck: bad_debit"
         return entry
     qty, reason = positions_mod.size_entry(fresh_debit, fresh_account.equity, open_risk, cycle_spent=0.0)
@@ -325,7 +325,7 @@ def _attempt_entry(
         underlying=spread.underlying, direction=spread.direction, expiration=spread.expiration,
         long=long_q, short=short_q, width=spread.width, net_debit=fresh_debit, skew=spread.skew,
     )
-    plan = screener.build_entry_plan(fresh_spread, qty, cycle_id)
+    plan = options_screener.build_entry_plan(fresh_spread, qty, cycle_id)
     entry["receipt"] = _settle(trading, plan, execute)
     return entry
 
@@ -346,7 +346,7 @@ def _settle(trading: object, plan: OrderPlan, execute: bool) -> dict:
 @app.command()
 def run(
     execute: bool = typer.Option(False, help="Actually submit paper orders (dry run otherwise)."),
-    stub: bool = typer.Option(False, help="Rule-based decision instead of the LLM."),
+    manual_mode: bool = typer.Option(False, help="Pick the entry candidate yourself instead of asking the LLM."),
     loop: bool = typer.Option(False, help="Run forever on an interval."),
     interval: int = typer.Option(900, help="Seconds between cycles with --loop."),
 ) -> None:
@@ -356,7 +356,7 @@ def run(
     if execute:
         logger.warning("ARMED: paper order submission is enabled")
     while True:
-        record = run_cycle(config, trading, stock_data, option_data, execute=execute, use_stub=stub)
+        record = run_cycle(config, trading, stock_data, option_data, execute=execute, manual_mode=manual_mode)
         logger.info("cycle {} outcome: {}", record["cycle_id"], record.get("outcome"))
         if not loop:
             break
@@ -390,7 +390,7 @@ def candidates() -> None:
     config, trading, stock_data, _ = _bootstrap()
     clock = broker.fetch_clock(trading)
     mids = broker.fetch_spot_mids(stock_data, config.symbols)
-    features = _build_features(config, stock_data, mids, clock.server_time)
+    features = _build_trading_signals(config, stock_data, mids, clock.server_time)
     for c in signals.build_candidates(features, clock.is_open, config.bar_seconds):
         events = ",".join(e.kind for e in c.events) or "-"
         rsi = f"{c.rsi:.1f}" if c.rsi is not None else "-"

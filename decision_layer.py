@@ -1,6 +1,6 @@
-"""Entry signal, decision side: the LLM (or stub) picks at most one entry.
+"""Decision layer: the LLM (or the human, in manual mode) picks at most one entry.
 
-The model only ever chooses a symbol from the scored candidate list and a
+The decider only ever chooses a symbol from the scored candidate list and a
 direction. Strikes, expiration, quantity and price are deterministic code.
 Any malformed output means no entry. Errors surface as status codes or
 exception type names only — response bodies are never copied into errors.
@@ -9,6 +9,7 @@ exception type names only — response bodies are never copied into errors.
 from __future__ import annotations
 
 import json
+from typing import Callable
 
 import httpx
 
@@ -143,16 +144,43 @@ def decide_entry(
     return parse_entry_choice(content, {c.symbol for c in tradeable}, model_used)
 
 
-def stub_decide(candidates: list[SymbolFeatures]) -> EntryChoice | None:
-    """Rule-based fallback: first candidate (by symbol) enters in its first event's direction."""
-    for c in sorted(candidates, key=lambda c: c.symbol):
-        if c.gate_block is not None or not c.events:
-            continue
-        event = c.events[0]
-        return EntryChoice(
-            symbol=c.symbol,
-            direction=event.direction,
-            thesis=f"Stub rule: {event.kind} event fired.",
-            model="stub",
+def manual_decide(
+    candidates: list[SymbolFeatures],
+    input_fn: Callable[[str], str] | None = None,
+    echo: Callable[[str], None] = print,
+) -> EntryChoice | None:
+    """Manual mode: the human picks which candidate to trade, or passes.
+
+    Anything unparseable — blank, not a number, out of range — is a pass:
+    no order ever results from garbage input. The direction defaults to the
+    selected candidate's first event; only an explicit CALL/PUT overrides it.
+    """
+    if input_fn is None:
+        input_fn = input  # resolved at call time so tests can patch builtins.input
+    tradeable = sorted(
+        (c for c in candidates if c.gate_block is None and c.events),
+        key=lambda c: c.symbol,
+    )
+    if not tradeable:
+        return None
+    echo("Candidates with fired events:")
+    for index, c in enumerate(tradeable, start=1):
+        events = ", ".join(e.kind for e in c.events)
+        echo(
+            f"  [{index}] {c.symbol:<6} spot={c.mid} events={events} "
+            f"rsi={c.rsi} atr={c.atr} macd_hist={c.macd_hist}"
         )
-    return None
+    raw = input_fn("Select a candidate number to trade (blank to pass): ").strip()
+    if not raw.isdigit() or not (1 <= int(raw) <= len(tradeable)):
+        return None
+    chosen = tradeable[int(raw) - 1]
+    default_direction = chosen.events[0].direction
+    raw_direction = input_fn(f"Direction CALL or PUT [default {default_direction}]: ").strip().upper()
+    direction = raw_direction if raw_direction in ("CALL", "PUT") else default_direction
+    event_kinds = ", ".join(e.kind for e in chosen.events)
+    return EntryChoice(
+        symbol=chosen.symbol,
+        direction=direction,
+        thesis=f"Manual selection ({event_kinds}).",
+        model="manual",
+    )

@@ -2,7 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-import screener
+import options_screener as screener
 from models import LegQuote, OpenSpread
 
 NOW = datetime(2026, 8, 31, 15, 0, tzinfo=timezone.utc)
