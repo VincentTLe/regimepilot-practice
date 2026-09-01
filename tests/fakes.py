@@ -60,6 +60,7 @@ class FakeTradingClient:
         orders=(),
         contracts=(),
         submit_error: Exception | None = None,
+        order_statuses: dict | None = None,
     ):
         self.account = account or fake_account()
         self.clock = clock or fake_clock()
@@ -68,6 +69,7 @@ class FakeTradingClient:
         self.contracts = list(contracts)
         self.submit_error = submit_error
         self.submitted: list = []
+        self.order_statuses = dict(order_statuses or {})
 
     def get_clock(self):
         return self.clock
@@ -89,6 +91,11 @@ class FakeTradingClient:
             raise self.submit_error
         self.submitted.append(request)
         return SimpleNamespace(id="order-1", status="accepted")
+
+    def get_order_by_id(self, order_id):
+        if order_id not in self.order_statuses:
+            raise KeyError(order_id)
+        return SimpleNamespace(id=order_id, status=self.order_statuses[order_id])
 
 
 def fake_bar(stamp: datetime, open_: float, high: float, low: float, close: float,

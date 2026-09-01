@@ -25,6 +25,7 @@ import options_screener
 import pos_and_risk
 import settings
 import signals
+import sounds
 from data_models import Config, EntryChoice, OrderPlan, SpreadQuote, SymbolFeatures, to_json_line
 
 JOURNAL_PATH = Path("logs") / "cycles.jsonl"
@@ -354,6 +355,42 @@ def _settle(trading: object, plan: OrderPlan, execute: bool) -> dict:
             "error": receipt.error, "client_order_id": receipt.client_order_id}
 
 
+# --- Fill tracking: sound + log when a submitted order actually fills ---
+FILL_POLL_TIMEOUT_SECONDS = 30  # short poll right after a cycle submits an order
+FILL_POLL_INTERVAL_SECONDS = 2
+_FILLED = {"filled"}
+_DEAD = {"canceled", "cancelled", "expired", "rejected", "done_for_day"}
+# anything else (new, accepted, partially_filled, ...) stays pending
+
+
+def _new_orders(record: dict) -> dict[str, str]:
+    """order_id -> readable label for every order the cycle actually submitted."""
+    orders: dict[str, str] = {}
+    for exit_entry in record.get("exits") or []:
+        receipt = exit_entry.get("receipt") or {}
+        if receipt.get("submitted") and receipt.get("order_id"):
+            orders[receipt["order_id"]] = f"exit {exit_entry.get('spread')}"
+    entry = record.get("entry") or {}
+    receipt = entry.get("receipt") or {}
+    if receipt.get("submitted") and receipt.get("order_id"):
+        orders[receipt["order_id"]] = f"entry {entry.get('symbol')}"
+    return orders
+
+
+def _check_fills(trading: object, pending: dict[str, str]) -> None:
+    """Resolve pending orders in place; sound + log on a fill. Notification only, never raises."""
+    for order_id, label in list(pending.items()):
+        status = broker.fetch_order_status(trading, order_id)
+        if status in _FILLED:
+            logger.info("FILLED: {} (order {})", label, order_id)
+            sounds.play_fill_sound()
+            del pending[order_id]
+        elif status in _DEAD:
+            logger.info("order not filled ({}): {} (order {})", status, label, order_id)
+            del pending[order_id]
+        # None (lookup failed) or still open: keep waiting
+
+
 @app.command()
 def run(
     execute: bool = typer.Option(False, help="Actually submit paper orders (dry run otherwise)."),
@@ -368,12 +405,27 @@ def run(
     config, trading, stock_data, option_data = _bootstrap()
     if execute:
         logger.warning("ARMED: paper order submission is enabled")
+    pending: dict[str, str] = {}  # order_id -> label, in-memory only
     while True:
         record = run_cycle(config, trading, stock_data, option_data, execute=execute, manual_mode=manual_mode)
         logger.info("cycle {} outcome: {}", record["cycle_id"], record.get("outcome"))
+        new = _new_orders(record)
+        pending.update(new)
+        if new:
+            # Short poll for instant fill feedback, timeboxed so an old
+            # straggler can never stall the loop.
+            deadline = time.monotonic() + FILL_POLL_TIMEOUT_SECONDS
+            while True:
+                _check_fills(trading, pending)
+                if not (new.keys() & pending.keys()) or time.monotonic() >= deadline:
+                    break
+                time.sleep(FILL_POLL_INTERVAL_SECONDS)
         if not loop:
+            if pending:
+                logger.info("orders still open at exit (no fill sound after this): {}", list(pending.values()))
             break
         time.sleep(interval)
+        _check_fills(trading, pending)  # catch slow fills from earlier cycles
 
 
 @app.command()

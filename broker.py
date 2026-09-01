@@ -330,3 +330,18 @@ def submit_paper_order(trading: Any, plan: OrderPlan) -> OrderReceipt:
         order_id=str(getattr(order, "id", None)),
         status=str(getattr(order, "status", None)),
     )
+
+
+def fetch_order_status(trading: Any, order_id: str) -> str | None:
+    """Current status of an order ("filled", "canceled", ...), or None if the lookup fails.
+
+    Read-only, notification path: a failure here must never block a cycle.
+    """
+    try:
+        order = trading.get_order_by_id(order_id)
+    except Exception:
+        return None
+    status = getattr(order, "status", None)
+    if status is None:
+        return None
+    return getattr(status, "value", str(status))

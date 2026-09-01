@@ -170,3 +170,16 @@ def test_submit_refusal_reports_type_name_only():
     assert receipt.submitted is False
     assert receipt.error == "RuntimeError"
     assert SECRET not in (receipt.error or "")
+
+
+def test_fetch_order_status_unwraps_enum_value():
+    trading = FakeTradingClient(
+        order_statuses={"o1": SimpleNamespace(value="filled"), "o2": "canceled"}
+    )
+    assert broker.fetch_order_status(trading, "o1") == "filled"
+    assert broker.fetch_order_status(trading, "o2") == "canceled"
+
+
+def test_fetch_order_status_returns_none_on_lookup_failure():
+    trading = FakeTradingClient()  # no known orders: get_order_by_id raises
+    assert broker.fetch_order_status(trading, "missing") is None

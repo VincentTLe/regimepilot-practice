@@ -41,12 +41,14 @@ def manual_answers(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def spy_only_whitelist(monkeypatch):
-    """These tests assume a one-symbol whitelist and a 0.5% per-entry cap
-    regardless of trader edits to settings.yaml."""
+    """These tests assume a one-symbol whitelist, a 0.5% per-entry cap and a
+    3%-5% width band, regardless of trader edits to settings.yaml."""
     import settings
 
     monkeypatch.setattr(settings, "SYMBOLS", ("SPY",))
     monkeypatch.setattr(settings, "PER_ENTRY_FRACTION", 0.005)
+    monkeypatch.setattr(settings, "MIN_WIDTH_PCT", 0.03)
+    monkeypatch.setattr(settings, "MAX_WIDTH_PCT", 0.05)
 
 
 def make_config():
@@ -330,3 +332,57 @@ def test_preflight_fails_on_missing_credentials(monkeypatch):
     result = CliRunner().invoke(cli.app, ["preflight"])
     assert result.exit_code == 1
     assert "FAIL credentials" in result.output
+
+
+# --- Fill tracking ---
+
+
+def test_new_orders_collects_only_real_submissions():
+    record = {
+        "exits": [
+            {"spread": "SPY 2026-09-11 call", "receipt": {"submitted": True, "order_id": "x1"}},
+            {"spread": "QQQ 2026-09-11 put", "receipt": {"submitted": False, "error": "APIError"}},
+            {"spread": "IWM 2026-09-11 call", "skipped": "no_quote"},
+        ],
+        "entry": {"symbol": "SPY", "receipt": {"submitted": True, "order_id": "e1"}},
+    }
+    assert cli._new_orders(record) == {"x1": "exit SPY 2026-09-11 call", "e1": "entry SPY"}
+
+
+def test_new_orders_handles_dry_run_and_empty_cycles():
+    assert cli._new_orders({"exits": [], "entry": None}) == {}
+    assert cli._new_orders({}) == {}
+    dry = {"entry": {"symbol": "SPY", "receipt": {"submitted": False, "dry_run": True}}}
+    assert cli._new_orders(dry) == {}
+
+
+def test_check_fills_plays_sound_on_fill_only(monkeypatch):
+    played = []
+    monkeypatch.setattr(cli.sounds, "play_fill_sound", lambda: played.append(True))
+    trading = FakeTradingClient(order_statuses={
+        "filled-1": "filled",
+        "dead-1": "canceled",
+        "open-1": "new",
+        # "lost-1" unknown: status lookup fails
+    })
+    pending = {
+        "filled-1": "entry SPY",
+        "dead-1": "exit QQQ",
+        "open-1": "entry IWM",
+        "lost-1": "exit DIA",
+    }
+    cli._check_fills(trading, pending)
+    assert played == [True]  # one sound, for the one fill
+    assert pending == {"open-1": "entry IWM", "lost-1": "exit DIA"}
+
+
+def test_check_fills_never_raises_on_broken_client(monkeypatch):
+    monkeypatch.setattr(cli.sounds, "play_fill_sound", lambda: None)
+
+    class BrokenTrading:
+        def get_order_by_id(self, order_id):
+            raise RuntimeError("api down")
+
+    pending = {"o1": "entry SPY"}
+    cli._check_fills(BrokenTrading(), pending)
+    assert pending == {"o1": "entry SPY"}  # kept for a later check
