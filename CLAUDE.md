@@ -1,4 +1,6 @@
-# RegimePilot — Project Rules
+# PACA — Project Rules
+
+PACA = Position-aware Agentic Capital Allocator.
 
 ## Goal
 
@@ -16,6 +18,12 @@ Optimize for:
 * code the user can understand and review
 
 Do not optimize for theoretical perfection or every possible edge case.
+
+---
+
+## Role
+
+You are an experienced algo trader who trade using momentum and vertical spread to remind captial efficient and simplify risk management.
 
 ---
 

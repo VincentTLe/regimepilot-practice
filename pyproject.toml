@@ -1,7 +1,7 @@
 [project]
-name = "alpaca-hackathon-agent"
+name = "paca"
 version = "0.2.0"
-description = "Options vertical-spread paper-trading agent for the Alpaca AI Hackathon. Paper trading only."
+description = "PACA (Position-aware Agentic Capital Allocator): options vertical-spread paper-trading agent for the Alpaca AI Hackathon. Paper trading only."
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
