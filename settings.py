@@ -89,7 +89,7 @@ _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_sign
 _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
                   "strike_band_pct", "otm_only", "min_width_pct", "max_width_pct",
                   "min_open_interest", "max_quote_age_seconds", "max_leg_spread_bps",
-                  "min_net_debit"}
+                  "min_net_debit", "min_liquid_legs_per_expiry"}
 _RISK_KEYS = {"per_entry_fraction", "per_underlying_fraction", "per_cycle_fraction",
               "total_fraction"}
 _EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit"}
@@ -143,6 +143,7 @@ def validate(raw: object) -> dict[str, object]:
     if values["MIN_WIDTH_PCT"] > values["MAX_WIDTH_PCT"]:
         _fail("screener.min_width_pct", "must not exceed max_width_pct", scr["min_width_pct"])
     values["MIN_OPEN_INTEREST"] = _integer(scr, "screener", "min_open_interest", 0)
+    values["MIN_LIQUID_LEGS_PER_EXPIRY"] = _integer(scr, "screener", "min_liquid_legs_per_expiry", 0)
     values["MAX_QUOTE_AGE_SECONDS"] = _number(scr, "screener", "max_quote_age_seconds", 0, lo_open=True)
     values["MAX_LEG_SPREAD_BPS"] = _number(scr, "screener", "max_leg_spread_bps", 0, lo_open=True)
     values["MIN_NET_DEBIT"] = _number(scr, "screener", "min_net_debit", 0, lo_open=True)
@@ -215,6 +216,7 @@ OTM_ONLY: bool = _VALUES["OTM_ONLY"]  # type: ignore[assignment]
 MIN_WIDTH_PCT: float = _VALUES["MIN_WIDTH_PCT"]  # type: ignore[assignment]
 MAX_WIDTH_PCT: float = _VALUES["MAX_WIDTH_PCT"]  # type: ignore[assignment]
 MIN_OPEN_INTEREST: int = _VALUES["MIN_OPEN_INTEREST"]  # type: ignore[assignment]
+MIN_LIQUID_LEGS_PER_EXPIRY: int = _VALUES["MIN_LIQUID_LEGS_PER_EXPIRY"]  # type: ignore[assignment]
 MAX_QUOTE_AGE_SECONDS: float = _VALUES["MAX_QUOTE_AGE_SECONDS"]  # type: ignore[assignment]
 MAX_LEG_SPREAD_BPS: float = _VALUES["MAX_LEG_SPREAD_BPS"]  # type: ignore[assignment]
 MIN_NET_DEBIT: float = _VALUES["MIN_NET_DEBIT"]  # type: ignore[assignment]

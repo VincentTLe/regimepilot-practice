@@ -47,6 +47,27 @@ def test_pick_expirations_nearest_n_at_least_5_dte(monkeypatch):
     assert screener.pick_expirations({boundary}, TODAY) == [boundary]
 
 
+def test_liquid_expirations_drops_expiries_without_two_liquid_strikes(monkeypatch):
+    monkeypatch.setattr(settings, "MIN_OPEN_INTEREST", 100)
+    monkeypatch.setattr(settings, "MIN_LIQUID_LEGS_PER_EXPIRY", 2)
+    spot = 400.0  # MAX_WIDTH_PCT is pinned to 0.05 -> strikes 380..420 count
+    daily = date(2026, 9, 8)  # GLD Tuesday: liquid OI only far out of the money
+    weekly = date(2026, 9, 11)
+    thin = date(2026, 9, 14)  # one liquid strike near spot
+    by_expiry = {
+        daily: {
+            400.0: {"symbol": "A", "open_interest": 0},
+            401.0: {"symbol": "B", "open_interest": None},
+            430.0: {"symbol": "C", "open_interest": 900},  # outside 5% of spot
+            440.0: {"symbol": "D", "open_interest": 900},
+        },
+        weekly: {400.0: {"symbol": "E", "open_interest": 100}, 420.0: {"symbol": "F", "open_interest": 2500}},
+        thin: {400.0: {"symbol": "G", "open_interest": 800}, 401.0: {"symbol": "H", "open_interest": 99}},
+    }
+    assert screener.liquid_expirations(by_expiry, spot) == {weekly}
+    assert screener.liquid_expirations({}, spot) == set()
+
+
 # --- leg quality ---
 
 @pytest.mark.parametrize(

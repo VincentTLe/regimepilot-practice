@@ -74,7 +74,9 @@ def _screen_spread(
     """Fetch chains + snapshots for one underlying and pick the best spread
     across the nearest settings.EXPIRIES_TO_SCREEN eligible expiries."""
     by_expiry = broker.fetch_contracts(trading, underlying, direction, spot, today)
-    expirations = options_screener.pick_expirations(set(by_expiry), today)
+    expirations = options_screener.pick_expirations(
+        options_screener.liquid_expirations(by_expiry, spot), today
+    )
     if not expirations:
         return None, {"no_expiration": 1}
     symbols = [

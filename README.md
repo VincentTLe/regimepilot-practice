@@ -64,7 +64,9 @@ exact key (e.g. `settings.yaml: exits.stop_fraction: must be in (0, 1), got 5`).
 
 All numbers below are the shipped `settings.yaml` defaults — change them there.
 
-- **Whitelist** (`symbols` in settings.yaml): SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN by default.
+- **Whitelist** (`symbols` in settings.yaml): SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN,
+  IBIT, MSTR, SLV, WMT, GLD, USO, XLE by default (index/tech core plus bitcoin, metals,
+  energy and staples for diversification).
 - **Signals**: OHLCV bars at the configured `bar_timeframe` (default 15m, one
   fetch per symbol) drive RSI(14), ATR(14) and MACD(12/26/9). A symbol is a
   candidate only when at least one **event** fired on the latest completed bar:
@@ -77,7 +79,8 @@ All numbers below are the shipped `settings.yaml` defaults — change them there
   readings) and returns `{action, symbol, direction, thesis}`. Malformed output
   means no entry. Deterministic code picks everything else.
 - **Spread selection**: the nearest **3 expiries** (weeklies included) with
-  **≥5 DTE**, ranked as one pool;
+  **≥5 DTE** that have at least 3 strikes within 5% of spot with OI ≥ 100
+  (skips the empty daily expiries ETFs like GLD list), ranked as one pool;
   strikes within ±10% of spot, OTM only plus the one ATM strike bracketing
   spot; pair widths between **2% and 5% of spot**; per-leg filter: open
   interest ≥ 100, fresh two-sided quote (within 10 s of the server clock),

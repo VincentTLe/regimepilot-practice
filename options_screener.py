@@ -1,9 +1,11 @@
 """Option screener: pick the expiry, enumerate debit verticals, filter, rank, plan.
 
 Pure functions over pre-fetched contracts and snapshots. Selection rule
-(approved 2026-08-31, width rule revised 2026-09-01): the nearest
-EXPIRIES_TO_SCREEN listed expiries (weeklies included) with DTE >= MIN_DTE,
-ranked as one pool; candidate strike pairs within +/-10% of spot
+(approved 2026-08-31, width rule revised 2026-09-01, empty-expiry skip added
+2026-09-01): the nearest EXPIRIES_TO_SCREEN listed expiries (weeklies included)
+with DTE >= MIN_DTE that have at least MIN_LIQUID_LEGS_PER_EXPIRY strikes within
+MAX_WIDTH_PCT of spot carrying open interest >= MIN_OPEN_INTEREST, ranked as
+one pool; candidate strike pairs within +/-10% of spot
 (OTM strikes plus the ATM bracketing strike when OTM_ONLY) whose width is
 between MIN_WIDTH_PCT and MAX_WIDTH_PCT of spot;
 liquidity filter per leg (open interest floor + quote quality); rank survivors
@@ -28,6 +30,28 @@ def pick_expirations(expirations: set[date], today: date) -> list[date]:
     settings.MIN_DTE days out, nearest first; empty when there are none."""
     eligible = sorted(exp for exp in expirations if (exp - today).days >= settings.MIN_DTE)
     return eligible[: settings.EXPIRIES_TO_SCREEN]
+
+
+def liquid_expirations(by_expiry: dict[date, dict[float, dict]], spot: float) -> set[date]:
+    """Expiries with at least settings.MIN_LIQUID_LEGS_PER_EXPIRY strikes within
+    settings.MAX_WIDTH_PCT of spot whose open_interest >= settings.MIN_OPEN_INTEREST
+    (None counts as 0).
+
+    ETFs like GLD/USO/XLE list Mon/Tue/Wed daily expiries with a full strike
+    grid but ~zero open interest near spot (the few liquid strikes sit far
+    out, useless for a 2-5%-wide vertical); without this filter they crowd out
+    the liquid Friday weekly and monthly in pick_expirations. Input is the
+    {expiry: {strike: {"symbol", "open_interest"}}} shape broker.fetch_contracts returns."""
+    liquid: set[date] = set()
+    for expiry, strikes in by_expiry.items():
+        count = sum(
+            1 for strike, info in strikes.items()
+            if abs(strike - spot) <= spot * settings.MAX_WIDTH_PCT
+            and (info.get("open_interest") or 0) >= settings.MIN_OPEN_INTEREST
+        )
+        if count >= settings.MIN_LIQUID_LEGS_PER_EXPIRY:
+            liquid.add(expiry)
+    return liquid
 
 
 def quote_spread_bps(leg: LegQuote) -> float:
