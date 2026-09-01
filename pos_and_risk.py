@@ -155,11 +155,16 @@ def size_entry(
         return 0, "unknown_open_risk"
     if net_debit <= 0:
         return 0, "bad_debit"
-    per_entry_cap = settings.PER_ENTRY_FRACTION * equity
-    cycle_room = settings.PER_CYCLE_FRACTION * equity - cycle_spent
-    total_room = settings.TOTAL_FRACTION * equity - open_risk - cycle_spent
-    cap = min(per_entry_cap, cycle_room, total_room)
-    qty = math.floor(cap / (net_debit * 100.0))
+    rooms = {
+        "per_entry": settings.PER_ENTRY_FRACTION * equity,
+        "per_cycle": settings.PER_CYCLE_FRACTION * equity - cycle_spent,
+        "total": settings.TOTAL_FRACTION * equity - open_risk - cycle_spent,
+    }
+    binding = min(rooms, key=rooms.get)  # type: ignore[arg-type]
+    qty = math.floor(rooms[binding] / (net_debit * 100.0))
     if qty < 1:
-        return 0, "risk_caps"
+        return 0, (
+            f"risk_caps: {binding} room ${rooms[binding]:,.0f}"
+            f" < contract cost ${net_debit * 100.0:,.0f}"
+        )
     return qty, None

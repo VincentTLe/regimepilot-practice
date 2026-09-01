@@ -288,7 +288,7 @@ def _attempt_entry(
     entry["screen_rejections"] = rejections
     if spread is None:
         entry["rejected"] = "no_spread"
-        logger.info("no acceptable spread for {} {}", choice.symbol, choice.direction)
+        logger.info("no acceptable spread for {} {}: {}", choice.symbol, choice.direction, rejections)
         return entry
     entry["spread"] = {
         "long": spread.long.symbol, "short": spread.short.symbol,

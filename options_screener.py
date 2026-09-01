@@ -6,7 +6,8 @@ Pure functions over pre-fetched contracts and snapshots. Selection rule
 (OTM strikes plus the ATM bracketing strike when OTM_ONLY) whose width is
 between MIN_WIDTH_PCT and MAX_WIDTH_PCT of spot;
 liquidity filter per leg (open interest floor + quote quality); rank survivors
-by IV skew, flattest first, ties to higher combined open interest.
+by reward-to-risk (width - debit) / debit, highest first (rule revised
+2026-09-01, was flattest IV skew), ties to tighter combined leg quotes.
 
 Order plans are pure data. Only broker.submit_paper_order acts on one.
 """
@@ -27,6 +28,12 @@ def pick_expiration(expirations: set[date], today: date) -> date | None:
     return min(eligible) if eligible else None
 
 
+def quote_spread_bps(leg: LegQuote) -> float:
+    """Bid-ask spread as basis points of the mid; needs a positive two-sided quote."""
+    mid = (leg.bid + leg.ask) / 2  # type: ignore[operator]
+    return (leg.ask - leg.bid) / mid * 10_000  # type: ignore[operator]
+
+
 def check_leg(leg: LegQuote, server_time: datetime) -> str | None:
     """First failing liquidity/quality rule for one leg, or None when acceptable."""
     if leg.open_interest is None or leg.open_interest < settings.MIN_OPEN_INTEREST:
@@ -40,8 +47,7 @@ def check_leg(leg: LegQuote, server_time: datetime) -> str | None:
         return "future_quote"
     if age > settings.MAX_QUOTE_AGE_SECONDS:
         return "stale_quote"
-    mid = (leg.bid + leg.ask) / 2
-    if mid <= 0 or (leg.ask - leg.bid) / mid * 10_000 > settings.MAX_LEG_SPREAD_BPS:
+    if quote_spread_bps(leg) > settings.MAX_LEG_SPREAD_BPS:
         return "wide_spread"
     if leg.implied_vol is None or leg.implied_vol <= 0:
         return "missing_iv"
@@ -81,6 +87,10 @@ def enumerate_spreads(
     def _reject(reason: str) -> None:
         rejections[reason] = rejections.get(reason, 0) + 1
 
+    if len(strikes) < 2:
+        _reject("too_few_strikes_in_band")
+        return [], rejections
+
     leg_ok: dict[float, bool] = {}
     for strike in strikes:
         reason = check_leg(quotes_by_strike[strike], server_time)
@@ -92,12 +102,16 @@ def enumerate_spreads(
     min_width, max_width = spot * settings.MIN_WIDTH_PCT, spot * settings.MAX_WIDTH_PCT
     for i, lower in enumerate(strikes):
         for higher in strikes[i + 1:]:
+            # Leg failures are already tallied per strike; skip silently so the
+            # width tallies count only pairs with acceptable legs.
+            if not (leg_ok[lower] and leg_ok[higher]):
+                continue
             width = higher - lower
             if width > max_width:
-                break  # strikes are sorted: only wider pairs from here
-            if width < min_width:
+                _reject("too_wide")
                 continue
-            if not (leg_ok[lower] and leg_ok[higher]):
+            if width < min_width:
+                _reject("too_narrow")
                 continue
             if direction == "CALL":
                 long_leg, short_leg = quotes_by_strike[lower], quotes_by_strike[higher]
@@ -124,10 +138,14 @@ def enumerate_spreads(
 
 
 def rank_spreads(spreads: list[SpreadQuote]) -> list[SpreadQuote]:
-    """Flattest IV skew first; ties go to higher combined open interest."""
+    """Highest reward-to-risk first ((width - debit) / debit); ties go to
+    tighter combined leg quotes (summed bid-ask bps)."""
     return sorted(
         spreads,
-        key=lambda s: (s.skew, -((s.long.open_interest or 0) + (s.short.open_interest or 0))),
+        key=lambda s: (
+            -(s.width - s.net_debit) / s.net_debit,
+            quote_spread_bps(s.long) + quote_spread_bps(s.short),
+        ),
     )
 
 

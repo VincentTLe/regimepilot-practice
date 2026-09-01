@@ -3,10 +3,19 @@ from datetime import date
 import pytest
 
 import pos_and_risk
+import settings
 from data_models import LegPosition, LegQuote, OpenSpread
 
 EXP = date(2026, 9, 11)
 TODAY = date(2026, 8, 31)
+
+
+@pytest.fixture(autouse=True)
+def pinned_risk_fractions(monkeypatch):
+    """Sizing tests assume these caps regardless of trader edits to settings.yaml."""
+    monkeypatch.setattr(settings, "PER_ENTRY_FRACTION", 0.005)
+    monkeypatch.setattr(settings, "PER_CYCLE_FRACTION", 0.01)
+    monkeypatch.setattr(settings, "TOTAL_FRACTION", 0.10)
 
 
 def leg(symbol="SPY260911C00650000", underlying="SPY", qty=1, price=3.0, strike=650.0, option_type="C"):
@@ -188,13 +197,21 @@ def test_size_entry_refusals():
     assert pos_and_risk.size_entry(2.0, 0.0, 0.0, 0.0) == (0, "unknown_equity")
     assert pos_and_risk.size_entry(2.0, 100_000.0, None, 0.0) == (0, "unknown_open_risk")
     assert pos_and_risk.size_entry(0.0, 100_000.0, 0.0, 0.0) == (0, "bad_debit")
-    assert pos_and_risk.size_entry(6.0, 100_000.0, 0.0, 0.0) == (0, "risk_caps")  # $600 > $500
+    assert pos_and_risk.size_entry(6.0, 100_000.0, 0.0, 0.0) == (
+        0, "risk_caps: per_entry room $500 < contract cost $600"
+    )
 
 
 def test_size_entry_cycle_and_total_room():
     # cycle cap 1% = $1000; already spent $900 -> only $100 left -> qty 0 at $2 debit
-    assert pos_and_risk.size_entry(2.0, 100_000.0, 0.0, 900.0) == (0, "risk_caps")
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 0.0, 900.0) == (
+        0, "risk_caps: per_cycle room $100 < contract cost $200"
+    )
     # total cap 10% = $10k; open risk $9,900 -> $100 room -> refused
-    assert pos_and_risk.size_entry(2.0, 100_000.0, 9_900.0, 0.0) == (0, "risk_caps")
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 9_900.0, 0.0) == (
+        0, "risk_caps: total room $100 < contract cost $200"
+    )
     # open risk exactly at cap -> refused
-    assert pos_and_risk.size_entry(2.0, 100_000.0, 10_000.0, 0.0) == (0, "risk_caps")
+    assert pos_and_risk.size_entry(2.0, 100_000.0, 10_000.0, 0.0) == (
+        0, "risk_caps: total room $0 < contract cost $200"
+    )

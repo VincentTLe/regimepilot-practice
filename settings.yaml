@@ -29,11 +29,11 @@ screener:                    # which vertical spreads are even considered
   max_width_pct: 0.05        # spread width at most this fraction of spot (wider = more risk per spread)
   min_open_interest: 100     # per-leg liquidity floor, in contracts
   max_quote_age_seconds: 10.0     # reject quotes older than this vs Alpaca's server clock
-  max_leg_spread_bps: 350.0  # reject legs whose bid-ask spread exceeds this (350 = 3.5% of mid)
+  max_leg_spread_bps: 500.0  # reject legs whose bid-ask spread exceeds this (350 = 3.5% of mid)
   min_net_debit: 0.05        # ignore junk spreads cheaper than this ($ per share)
 
 risk:                        # position sizing — all fractions of LIVE account equity
-  per_entry_fraction: 0.005  # one entry's total debit <= this fraction (0.005 = $500 on $100k)
+  per_entry_fraction: 0.01  # one entry's total debit <= this fraction (0.005 = $500 on $100k)
   per_cycle_fraction: 0.01   # new premium per cycle <= this fraction of equity
   total_fraction: 0.10       # total open premium at risk <= this fraction of equity
 

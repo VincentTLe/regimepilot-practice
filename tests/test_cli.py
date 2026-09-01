@@ -41,10 +41,12 @@ def manual_answers(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def spy_only_whitelist(monkeypatch):
-    """These tests trade a one-symbol whitelist regardless of settings.yaml."""
+    """These tests assume a one-symbol whitelist and a 0.5% per-entry cap
+    regardless of trader edits to settings.yaml."""
     import settings
 
     monkeypatch.setattr(settings, "SYMBOLS", ("SPY",))
+    monkeypatch.setattr(settings, "PER_ENTRY_FRACTION", 0.005)
 
 
 def make_config():
@@ -89,8 +91,8 @@ def test_dry_run_cycle_plans_entry_but_submits_nothing(journal):
     assert record["outcome"] == "planned"
     entry = record["entry"]
     assert entry["symbol"] == "SPY" and entry["direction"] == "CALL"
-    # flattest skew wins among in-band pairs: 655/675 (skew .04, width 20)
-    # over 645/675 (skew .05, width 30); 645/655 (width 10) is below the floor
+    # highest reward-to-risk wins among in-band pairs: 655/675 (rr (20-2.95)/2.95
+    # = 5.8) over 645/675 (rr (30-5.55)/5.55 = 4.4); 645/655 (width 10) is below the floor
     assert entry["spread"]["long"] == "SPY260911C00655000"
     assert entry["spread"]["short"] == "SPY260911C00675000"
     assert entry["qty"] == 1

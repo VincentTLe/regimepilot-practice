@@ -83,7 +83,7 @@ def good_chain():
 
 def test_enumerate_call_spread_sides_and_pricing():
     spreads, rejections = screener.enumerate_spreads(good_chain(), "CALL", 100.0, EXP, "SPY", NOW)
-    assert rejections == {}
+    assert rejections == {"too_wide": 1}  # 95/105: width 10 = 10% of spot
     pair = {(s.long.symbol, s.short.symbol) for s in spreads}
     # bull call: long the lower strike, short the higher; 95/105 (width 10 = 10%
     # of spot) is outside the 3%-5% width band
@@ -114,6 +114,12 @@ def test_strike_band_excludes_far_strikes():
     quotes[125.0] = leg("C125", 125.0)  # outside +10% of spot 100
     spreads, _ = screener.enumerate_spreads(quotes, "CALL", 100.0, EXP, "SPY", NOW)
     assert all("C125" not in (s.long.symbol, s.short.symbol) for s in spreads)
+
+
+def test_too_few_strikes_in_band_is_tallied():
+    quotes = {125.0: leg("C125", 125.0)}  # outside +10% of spot 100
+    spreads, rejections = screener.enumerate_spreads(quotes, "CALL", 100.0, EXP, "SPY", NOW)
+    assert spreads == [] and rejections == {"too_few_strikes_in_band": 1}
 
 
 def test_width_band_is_3_to_5_pct_of_spot():
@@ -172,26 +178,24 @@ def test_bad_leg_blocks_pairs_but_not_others():
 
 # --- ranking ---
 
-def test_rank_flattest_skew_first_with_oi_tiebreak():
-    flat = leg("F", 100.0, iv=0.20, oi=100)
-    flat2 = leg("F2", 105.0, iv=0.20, oi=100)
-    steep = leg("S", 110.0, iv=0.35, oi=10_000)
+def test_rank_reward_to_risk_first_with_quote_tiebreak():
+    tight = leg("T", 100.0, bid=2.00, ask=2.02)   # ~100 bps quote
+    wide = leg("W", 105.0, bid=1.90, ask=2.10)    # ~1000 bps quote
     from data_models import SpreadQuote
 
-    def sq(long, short, skew):
+    def sq(long, short, width, debit):
         return SpreadQuote(
             underlying="SPY", direction="CALL", expiration=EXP,
-            long=long, short=short, width=5.0, net_debit=1.0, skew=skew,
+            long=long, short=short, width=width, net_debit=debit, skew=0.0,
         )
 
-    steeper = sq(flat, steep, 0.15)
-    flatter = sq(flat, flat2, 0.0)
-    ranked = screener.rank_spreads([steeper, flatter])
-    assert ranked[0] is flatter
-    # tie on skew -> higher combined OI wins
-    tie_low_oi = sq(flat, flat2, 0.05)
-    tie_high_oi = sq(steep, steep, 0.05)
-    assert screener.rank_spreads([tie_low_oi, tie_high_oi])[0] is tie_high_oi
+    poor = sq(tight, tight, 5.0, 2.5)  # (5 - 2.5) / 2.5 = 1.0
+    rich = sq(wide, wide, 5.0, 1.0)    # (5 - 1.0) / 1.0 = 4.0 -> wins despite wide quotes
+    assert screener.rank_spreads([poor, rich])[0] is rich
+    # tie on reward-to-risk -> tighter combined leg quotes win
+    tie_wide = sq(wide, wide, 5.0, 2.5)
+    tie_tight = sq(tight, tight, 5.0, 2.5)
+    assert screener.rank_spreads([tie_wide, tie_tight])[0] is tie_tight
 
 
 # --- order plans ---
