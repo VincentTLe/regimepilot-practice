@@ -45,6 +45,10 @@ def broken(mutate) -> dict:
         (lambda r: r["signals"].update(macd_fast=30), "signals.macd_fast"),  # >= slow
         (lambda r: r["signals"].update(rsi_period=0), "signals.rsi_period"),
         (lambda r: r["screener"].update(strike_band_pct=0.9), "screener.strike_band_pct"),
+        (lambda r: r["screener"].update(min_width_pct=0), "screener.min_width_pct"),
+        (lambda r: r["screener"].update(min_width_pct=0.06), "screener.min_width_pct"),  # > max
+        (lambda r: r["screener"].update(max_width_pct=0.9), "screener.max_width_pct"),
+        (lambda r: r["screener"].update(otm_only=1), "screener.otm_only"),  # must be a bool
         (lambda r: r.update(bar_timeframe="fifteen"), "bar_timeframe"),
         (lambda r: r.update(symbols=[]), "symbols"),
         (lambda r: r.update(symbols="SPY"), "symbols"),  # string, not a list

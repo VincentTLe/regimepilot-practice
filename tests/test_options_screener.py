@@ -3,11 +3,19 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 import options_screener as screener
+import settings
 from data_models import LegQuote, OpenSpread
 
 NOW = datetime(2026, 8, 31, 15, 0, tzinfo=timezone.utc)
 TODAY = NOW.date()
 EXP = date(2026, 9, 11)
+
+
+@pytest.fixture(autouse=True)
+def allow_itm(monkeypatch):
+    """Enumeration mechanics are tested on chains that straddle spot; the
+    OTM-only filter has its own dedicated tests below."""
+    monkeypatch.setattr(settings, "OTM_ONLY", False)
 
 
 def leg(
@@ -65,7 +73,7 @@ def chain(strikes_and_quotes):
 
 
 def good_chain():
-    # strikes 95..105, tight quotes, all legs pass
+    # strikes 95..105, tight quotes, all legs pass; spot 100 -> widths 3..5 acceptable
     return {
         95.0: leg("C95", 95.0, bid=6.0, ask=6.1, iv=0.20, oi=800),
         100.0: leg("C100", 100.0, bid=3.4, ask=3.5, iv=0.21, oi=900),
@@ -77,8 +85,9 @@ def test_enumerate_call_spread_sides_and_pricing():
     spreads, rejections = screener.enumerate_spreads(good_chain(), "CALL", 100.0, EXP, "SPY", NOW)
     assert rejections == {}
     pair = {(s.long.symbol, s.short.symbol) for s in spreads}
-    # bull call: long the lower strike, short the higher
-    assert ("C95", "C100") in pair and ("C100", "C105") in pair and ("C95", "C105") in pair
+    # bull call: long the lower strike, short the higher; 95/105 (width 10 = 10%
+    # of spot) is outside the 3%-5% width band
+    assert pair == {("C95", "C100"), ("C100", "C105")}
     near = next(s for s in spreads if (s.long.symbol, s.short.symbol) == ("C95", "C100"))
     assert near.net_debit == round(6.1 - 3.4, 2)
     assert near.width == 5.0
@@ -97,7 +106,7 @@ def test_enumerate_put_spread_reverses_sides():
     spreads, _ = screener.enumerate_spreads(put_chain(), "PUT", 100.0, EXP, "SPY", NOW)
     pair = {(s.long.symbol, s.short.symbol) for s in spreads}
     # bear put: long the higher strike, short the lower
-    assert ("P105", "P100") in pair and ("P100", "P95") in pair
+    assert pair == {("P105", "P100"), ("P100", "P95")}
 
 
 def test_strike_band_excludes_far_strikes():
@@ -107,13 +116,40 @@ def test_strike_band_excludes_far_strikes():
     assert all("C125" not in (s.long.symbol, s.short.symbol) for s in spreads)
 
 
-def test_width_capped_at_three_steps():
+def test_width_band_is_3_to_5_pct_of_spot():
     quotes = {
-        90.0 + 5 * i: leg(f"C{i}", 90.0 + 5 * i, bid=8.0 - i, ask=8.1 - i, oi=500)
-        for i in range(5)  # strikes 90..110
+        96.0 + i: leg(f"C{i}", 96.0 + i, bid=10.0 - 0.5 * i, ask=10.05 - 0.5 * i, oi=500)
+        for i in range(9)  # strikes 96..104, $1 steps
     }
     spreads, _ = screener.enumerate_spreads(quotes, "CALL", 100.0, EXP, "SPY", NOW)
-    assert max((s.width for s in spreads), default=0) <= 15.0  # 3 steps of 5
+    # spot 100 -> only widths 3.0..5.0 qualify (min 3%, max 5%)
+    assert spreads and {s.width for s in spreads} == {3.0, 4.0, 5.0}
+
+
+def test_otm_plus_atm_call_keeps_bracketing_strike(monkeypatch):
+    monkeypatch.setattr(settings, "OTM_ONLY", True)
+    quotes = {
+        96.0 + i: leg(f"C{i}", 96.0 + i, bid=10.0 - 0.5 * i, ask=10.05 - 0.5 * i, oi=500)
+        for i in range(9)  # strikes 96..104, $1 steps
+    }
+    spreads, _ = screener.enumerate_spreads(quotes, "CALL", 100.0, EXP, "SPY", NOW)
+    # kept strikes: ATM 100 (highest <= spot) plus OTM 101..104; 96..99 excluded
+    assert {(s.long.strike, s.short.strike) for s in spreads} == {
+        (100.0, 103.0), (100.0, 104.0), (101.0, 104.0),
+    }
+
+
+def test_otm_plus_atm_put_keeps_bracketing_strike(monkeypatch):
+    monkeypatch.setattr(settings, "OTM_ONLY", True)
+    quotes = {
+        96.0 + i: leg(f"P{i}", 96.0 + i, bid=5.0 + 0.5 * i, ask=5.05 + 0.5 * i, oi=500)
+        for i in range(9)  # put premiums rise with strike
+    }
+    spreads, _ = screener.enumerate_spreads(quotes, "PUT", 100.0, EXP, "SPY", NOW)
+    # kept strikes: ATM 100 (lowest >= spot) plus OTM 96..99; 101..104 excluded
+    assert {(s.long.strike, s.short.strike) for s in spreads} == {
+        (99.0, 96.0), (100.0, 96.0), (100.0, 97.0),
+    }
 
 
 def test_debit_sanity_rejections():
@@ -128,10 +164,10 @@ def test_debit_sanity_rejections():
 
 def test_bad_leg_blocks_pairs_but_not_others():
     quotes = good_chain()
-    quotes[100.0] = leg("C100", 100.0, bid=3.4, ask=3.5, iv=None)  # kills any pair using 100
+    quotes[95.0] = leg("C95", 95.0, bid=6.0, ask=6.1, iv=None)  # kills any pair using 95
     spreads, rejections = screener.enumerate_spreads(quotes, "CALL", 100.0, EXP, "SPY", NOW)
     assert rejections.get("missing_iv") == 1
-    assert {(s.long.symbol, s.short.symbol) for s in spreads} == {("C95", "C105")}
+    assert {(s.long.symbol, s.short.symbol) for s in spreads} == {("C100", "C105")}
 
 
 # --- ranking ---

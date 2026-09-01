@@ -54,18 +54,20 @@ def make_config():
 
 
 def entry_chain_snapshots():
+    # spot ~650 -> acceptable widths 19.50..32.50 (3%-5% of spot);
+    # 645 is the ATM bracketing strike (highest <= spot), kept by the OTM-only filter
     return {
         "SPY260911C00645000": fake_snapshot(6.0, 6.1, iv=0.20),
-        "SPY260911C00650000": fake_snapshot(3.4, 3.5, iv=0.21),
-        "SPY260911C00655000": fake_snapshot(1.5, 1.55, iv=0.25),
+        "SPY260911C00655000": fake_snapshot(3.4, 3.5, iv=0.21),
+        "SPY260911C00675000": fake_snapshot(0.55, 0.56, iv=0.25),
     }
 
 
 def entry_contracts():
     return [
         fake_contract("SPY260911C00645000", 645.0, EXP),
-        fake_contract("SPY260911C00650000", 650.0, EXP),
         fake_contract("SPY260911C00655000", 655.0, EXP),
+        fake_contract("SPY260911C00675000", 675.0, EXP),
     ]
 
 
@@ -87,9 +89,10 @@ def test_dry_run_cycle_plans_entry_but_submits_nothing(journal):
     assert record["outcome"] == "planned"
     entry = record["entry"]
     assert entry["symbol"] == "SPY" and entry["direction"] == "CALL"
-    # flattest skew wins: 645/650 (skew .01) over 650/655 (.04) and 645/655 (.05)
-    assert entry["spread"]["long"] == "SPY260911C00645000"
-    assert entry["spread"]["short"] == "SPY260911C00650000"
+    # flattest skew wins among in-band pairs: 655/675 (skew .04, width 20)
+    # over 645/675 (skew .05, width 30); 645/655 (width 10) is below the floor
+    assert entry["spread"]["long"] == "SPY260911C00655000"
+    assert entry["spread"]["short"] == "SPY260911C00675000"
     assert entry["qty"] == 1
     assert entry["receipt"]["dry_run"] is True
     lines = journal.read_text().strip().splitlines()
@@ -102,8 +105,8 @@ def test_execute_cycle_submits_one_mleg_order():
     assert record["outcome"] == "submitted"
     assert len(trading.submitted) == 1
     request = trading.submitted[0]
-    assert [leg.symbol for leg in request.legs] == ["SPY260911C00645000", "SPY260911C00650000"]
-    assert request.limit_price == pytest.approx(6.1 - 3.4)
+    assert [leg.symbol for leg in request.legs] == ["SPY260911C00655000", "SPY260911C00675000"]
+    assert request.limit_price == pytest.approx(3.5 - 0.55)
 
 
 def test_market_closed_does_nothing():

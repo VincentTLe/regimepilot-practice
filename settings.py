@@ -86,8 +86,9 @@ _TOP_KEYS = {"symbols", "bar_timeframe", "loop_interval_seconds",
              "signals", "screener", "risk", "exits", "llm"}
 _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_signal",
                 "atr_event_mult", "stale_bar_factor", "min_bars"}
-_SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "strike_band_pct", "max_width_steps",
-                  "min_open_interest", "max_quote_age_seconds", "max_leg_spread_bps", "min_net_debit"}
+_SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "strike_band_pct", "otm_only",
+                  "min_width_pct", "max_width_pct", "min_open_interest",
+                  "max_quote_age_seconds", "max_leg_spread_bps", "min_net_debit"}
 _RISK_KEYS = {"per_entry_fraction", "per_cycle_fraction", "total_fraction"}
 _EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit"}
 _LLM_KEYS = {"primary_model", "fallback_models"}
@@ -131,7 +132,13 @@ def validate(raw: object) -> dict[str, object]:
     values["MAX_EXPIRY_LOOKAHEAD_DAYS"] = _integer(
         scr, "screener", "max_expiry_lookahead_days", values["MIN_DTE"] + 1)
     values["STRIKE_BAND_PCT"] = _number(scr, "screener", "strike_band_pct", 0, 0.5, lo_open=True)
-    values["MAX_WIDTH_STEPS"] = _integer(scr, "screener", "max_width_steps", 1)
+    if not isinstance(scr["otm_only"], bool):
+        _fail("screener.otm_only", "must be true or false", scr["otm_only"])
+    values["OTM_ONLY"] = scr["otm_only"]
+    values["MIN_WIDTH_PCT"] = _number(scr, "screener", "min_width_pct", 0, 0.5, lo_open=True)
+    values["MAX_WIDTH_PCT"] = _number(scr, "screener", "max_width_pct", 0, 0.5, lo_open=True)
+    if values["MIN_WIDTH_PCT"] > values["MAX_WIDTH_PCT"]:
+        _fail("screener.min_width_pct", "must not exceed max_width_pct", scr["min_width_pct"])
     values["MIN_OPEN_INTEREST"] = _integer(scr, "screener", "min_open_interest", 0)
     values["MAX_QUOTE_AGE_SECONDS"] = _number(scr, "screener", "max_quote_age_seconds", 0, lo_open=True)
     values["MAX_LEG_SPREAD_BPS"] = _number(scr, "screener", "max_leg_spread_bps", 0, lo_open=True)
@@ -195,7 +202,9 @@ MIN_BARS: int = _VALUES["MIN_BARS"]  # type: ignore[assignment]
 MIN_DTE: int = _VALUES["MIN_DTE"]  # type: ignore[assignment]
 MAX_EXPIRY_LOOKAHEAD_DAYS: int = _VALUES["MAX_EXPIRY_LOOKAHEAD_DAYS"]  # type: ignore[assignment]
 STRIKE_BAND_PCT: float = _VALUES["STRIKE_BAND_PCT"]  # type: ignore[assignment]
-MAX_WIDTH_STEPS: int = _VALUES["MAX_WIDTH_STEPS"]  # type: ignore[assignment]
+OTM_ONLY: bool = _VALUES["OTM_ONLY"]  # type: ignore[assignment]
+MIN_WIDTH_PCT: float = _VALUES["MIN_WIDTH_PCT"]  # type: ignore[assignment]
+MAX_WIDTH_PCT: float = _VALUES["MAX_WIDTH_PCT"]  # type: ignore[assignment]
 MIN_OPEN_INTEREST: int = _VALUES["MIN_OPEN_INTEREST"]  # type: ignore[assignment]
 MAX_QUOTE_AGE_SECONDS: float = _VALUES["MAX_QUOTE_AGE_SECONDS"]  # type: ignore[assignment]
 MAX_LEG_SPREAD_BPS: float = _VALUES["MAX_LEG_SPREAD_BPS"]  # type: ignore[assignment]

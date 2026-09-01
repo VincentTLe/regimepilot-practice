@@ -1,8 +1,10 @@
 """Option screener: pick the expiry, enumerate debit verticals, filter, rank, plan.
 
 Pure functions over pre-fetched contracts and snapshots. Selection rule
-(approved 2026-08-31): nearest listed expiry (weeklies included) with DTE >= 5;
-candidate strike pairs within +/-10% of spot at widths of 1-3 strike steps;
+(approved 2026-08-31, width rule revised 2026-09-01): nearest listed expiry
+(weeklies included) with DTE >= 5; candidate strike pairs within +/-10% of spot
+(OTM strikes plus the ATM bracketing strike when OTM_ONLY) whose width is
+between MIN_WIDTH_PCT and MAX_WIDTH_PCT of spot;
 liquidity filter per leg (open interest floor + quote quality); rank survivors
 by IV skew, flattest first, ties to higher combined open interest.
 
@@ -58,10 +60,22 @@ def enumerate_spreads(
 
     Bull call: long the lower strike, short the higher. Bear put: long the
     higher strike, short the lower. Both legs must sit inside the strike band
-    and pass check_leg; the spread must price sanely (settings.MIN_NET_DEBIT <= debit < width).
+    (out of the money, or the ATM strike bracketing spot, when
+    settings.OTM_ONLY) and pass check_leg; the
+    width must be within [MIN_WIDTH_PCT, MAX_WIDTH_PCT] of spot; the spread
+    must price sanely (settings.MIN_NET_DEBIT <= debit < width).
     """
     lo, hi = spot * (1 - settings.STRIKE_BAND_PCT), spot * (1 + settings.STRIKE_BAND_PCT)
-    strikes = sorted(strike for strike in quotes_by_strike if lo <= strike <= hi)
+    in_band = [s for s in quotes_by_strike if lo <= s <= hi]
+    if settings.OTM_ONLY:
+        # OTM strikes plus the one ATM strike bracketing spot on the ITM side.
+        itm = [s for s in in_band if (s <= spot if direction == "CALL" else s >= spot)]
+        atm = (max(itm) if direction == "CALL" else min(itm)) if itm else None
+        in_band = [
+            s for s in in_band
+            if s == atm or (s > spot if direction == "CALL" else s < spot)
+        ]
+    strikes = sorted(in_band)
     rejections: dict[str, int] = {}
 
     def _reject(reason: str) -> None:
@@ -75,18 +89,20 @@ def enumerate_spreads(
             _reject(reason)
 
     spreads: list[SpreadQuote] = []
+    min_width, max_width = spot * settings.MIN_WIDTH_PCT, spot * settings.MAX_WIDTH_PCT
     for i, lower in enumerate(strikes):
-        for step in range(1, settings.MAX_WIDTH_STEPS + 1):
-            if i + step >= len(strikes):
-                break
-            higher = strikes[i + step]
+        for higher in strikes[i + 1:]:
+            width = higher - lower
+            if width > max_width:
+                break  # strikes are sorted: only wider pairs from here
+            if width < min_width:
+                continue
             if not (leg_ok[lower] and leg_ok[higher]):
                 continue
             if direction == "CALL":
                 long_leg, short_leg = quotes_by_strike[lower], quotes_by_strike[higher]
             else:
                 long_leg, short_leg = quotes_by_strike[higher], quotes_by_strike[lower]
-            width = higher - lower
             net_debit = round(long_leg.ask - short_leg.bid, 2)  # type: ignore[operator]
             if not (settings.MIN_NET_DEBIT <= net_debit < width):
                 _reject("bad_debit")

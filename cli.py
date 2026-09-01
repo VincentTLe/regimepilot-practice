@@ -202,7 +202,7 @@ def run_cycle(
     if choice is not None:
         record["entry"] = _attempt_entry(
             choice, features[choice.symbol].mid, config, trading, option_data,
-            account.equity, open_risk, account.open_order_symbols, clock, cycle_id, execute,
+            account.equity, open_risk, account.open_order_symbols, cycle_id, execute,
         )
 
     submitted = [e for e in exits if e.get("receipt", {}).get("submitted")] or (
@@ -266,7 +266,6 @@ def _attempt_entry(
     equity: float | None,
     open_risk: float | None,
     pending_symbols: frozenset[str],
-    clock,
     cycle_id: str,
     execute: bool,
 ) -> dict:
@@ -275,9 +274,13 @@ def _attempt_entry(
         entry["rejected"] = "missing_quote"
         return entry
     try:
+        # Fresh clock: the cycle-start clock is stale by now (manual mode can sit at
+        # the prompt for minutes), and quotes newer than it fail check_leg's
+        # future_quote sanity check.
+        screen_clock = broker.fetch_clock(trading)
         spread, rejections = _screen_spread(
             trading, option_data, choice.symbol, choice.direction, spot,
-            clock.server_time, clock.server_time.date(),
+            screen_clock.server_time, screen_clock.server_time.date(),
         )
     except broker.BrokerError as error:
         entry["rejected"] = str(error)
