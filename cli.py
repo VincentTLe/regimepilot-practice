@@ -134,7 +134,8 @@ def run_cycle(
             ],
             "open_risk": open_risk,
             "warnings": warnings
-            + [f"unparsed position: {p}" for p in account.unparsed_positions],
+            + [f"unparsed position: {p}" for p in account.unparsed_positions]
+            + pos_and_risk.over_cap_warnings(spreads, account.equity),
         }
     )
     for warning in record["warnings"]:

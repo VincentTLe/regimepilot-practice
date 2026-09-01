@@ -165,6 +165,27 @@ def open_premium_at_risk(spreads: list[OpenSpread]) -> float | None:
     return total
 
 
+def over_cap_warnings(spreads: list[OpenSpread], equity: float | None) -> list[str]:
+    """One warning per underlying whose open premium exceeds the per-underlying cap.
+
+    Observation only — never blocks or closes anything. Unknown equity or an
+    underlying with an unknown entry debit is skipped: those cases already
+    surface through the entry refusals and unknown-debit warnings.
+    """
+    if equity is None or equity <= 0:
+        return []
+    cap = settings.PER_UNDERLYING_FRACTION * equity
+    warnings = []
+    for underlying in sorted({s.underlying for s in spreads}):
+        at_risk = open_premium_at_risk([s for s in spreads if s.underlying == underlying])
+        if at_risk is not None and at_risk > cap:
+            warnings.append(
+                f"{underlying} over per-underlying cap: ${at_risk:,.0f} at risk"
+                f" > ${cap:,.0f} ({settings.PER_UNDERLYING_FRACTION:.1%} of equity)"
+            )
+    return warnings
+
+
 def size_entry(
     net_debit: float,
     equity: float | None,

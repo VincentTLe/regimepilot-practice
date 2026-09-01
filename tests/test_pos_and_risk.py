@@ -144,10 +144,10 @@ def test_pair_spreads_reports_only_the_leftover_legs():
 
 # --- mechanical exits ---
 
-def spread(debit=2.0, expiration=EXP):
+def spread(debit=2.0, expiration=EXP, underlying="SPY", qty=1):
     return OpenSpread(
-        underlying="SPY", expiration=expiration, option_type="C",
-        long_symbol="L", short_symbol="S", qty=1, net_entry_debit=debit,
+        underlying=underlying, expiration=expiration, option_type="C",
+        long_symbol="L", short_symbol="S", qty=qty, net_entry_debit=debit,
     )
 
 
@@ -287,3 +287,21 @@ def test_size_entry_per_underlying_room():
     )
     # $1,500 at risk on this underlying -> $500 room -> per-entry still allows qty 2
     assert pos_and_risk.size_entry(2.0, 100_000.0, 1_500.0, 1_500.0, 0.0) == (2, None)
+
+
+def test_over_cap_warnings():
+    # cap 2% of 100k = $2,000; AMZN holds $1,050 + $1,000 = $2,050 across two spreads
+    book = [
+        spread(underlying="AMZN", debit=1.5, qty=7),
+        spread(underlying="AMZN", debit=1.0, qty=10),
+        spread(underlying="SPY", debit=2.0, qty=1),  # $200, comfortably under
+    ]
+    warnings = pos_and_risk.over_cap_warnings(book, 100_000.0)
+    assert len(warnings) == 1
+    assert "AMZN" in warnings[0] and "$2,050" in warnings[0] and "$2,000" in warnings[0]
+    # exactly at the cap is not over it
+    assert pos_and_risk.over_cap_warnings([spread(debit=2.0, qty=10)], 100_000.0) == []
+    # unknown entry debit: skipped, covered by the unknown_open_risk entry refusal
+    assert pos_and_risk.over_cap_warnings([spread(underlying="AMZN", debit=None)], 100_000.0) == []
+    # unknown equity: no cap to compare against
+    assert pos_and_risk.over_cap_warnings(book, None) == []
