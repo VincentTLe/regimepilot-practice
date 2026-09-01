@@ -12,10 +12,13 @@ EXP = date(2026, 9, 11)
 
 
 @pytest.fixture(autouse=True)
-def allow_itm(monkeypatch):
-    """Enumeration mechanics are tested on chains that straddle spot; the
-    OTM-only filter has its own dedicated tests below."""
+def pinned_screener_settings(monkeypatch):
+    """These tests assume a 3%-5% width band and chains that straddle spot,
+    regardless of trader edits to settings.yaml; the OTM-only filter has its
+    own dedicated tests below."""
     monkeypatch.setattr(settings, "OTM_ONLY", False)
+    monkeypatch.setattr(settings, "MIN_WIDTH_PCT", 0.03)
+    monkeypatch.setattr(settings, "MAX_WIDTH_PCT", 0.05)
 
 
 def leg(
@@ -51,7 +54,7 @@ def test_pick_expiration_nearest_at_least_5_dte_weeklies_included():
         (leg(stamp=None), "no_quote"),
         (leg(bid=2.2, ask=2.1), "crossed_quote"),
         (leg(bid=0.0), "crossed_quote"),
-        (leg(stamp=NOW + timedelta(seconds=5)), "future_quote"),
+        (leg(stamp=NOW + timedelta(seconds=11)), "future_quote"),  # > 10s ahead
         (leg(stamp=NOW - timedelta(seconds=11)), "stale_quote"),
         (leg(bid=1.0, ask=1.2), "wide_spread"),  # ~1818 bps
         (leg(iv=None), "missing_iv"),
@@ -64,6 +67,8 @@ def test_check_leg_rejections(bad_leg, reason):
 
 def test_check_leg_accepts_good_quote():
     assert screener.check_leg(leg(), NOW) is None
+    # quotes fetched after the clock read may postdate it slightly; still fresh
+    assert screener.check_leg(leg(stamp=NOW + timedelta(seconds=5)), NOW) is None
 
 
 # --- enumeration ---

@@ -43,7 +43,9 @@ def check_leg(leg: LegQuote, server_time: datetime) -> str | None:
     if leg.bid <= 0 or leg.ask <= 0 or leg.bid > leg.ask:
         return "crossed_quote"
     age = server_time.timestamp() - leg.quote_time.timestamp()
-    if age < 0:
+    # Snapshots are fetched after the clock read, so fresh quotes can legitimately
+    # postdate server_time by the fetch latency; only reject implausible timestamps.
+    if age < -settings.MAX_QUOTE_AGE_SECONDS:
         return "future_quote"
     if age > settings.MAX_QUOTE_AGE_SECONDS:
         return "stale_quote"

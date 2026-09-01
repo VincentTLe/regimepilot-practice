@@ -25,7 +25,7 @@ screener:                    # which vertical spreads are even considered
   max_expiry_lookahead_days: 45   # ignore expirations further out than this many days
   strike_band_pct: 0.10      # candidate strikes within +/- this fraction of spot (0.10 = 10%)
   otm_only: true             # out-of-the-money strikes plus the one at-the-money strike bracketing spot
-  min_width_pct: 0.03        # spread width at least this fraction of spot (0.03 = 3%)
+  min_width_pct: 0.02        # spread width at least this fraction of spot (0.03 = 3%)
   max_width_pct: 0.05        # spread width at most this fraction of spot (wider = more risk per spread)
   min_open_interest: 100     # per-leg liquidity floor, in contracts
   max_quote_age_seconds: 10.0     # reject quotes older than this vs Alpaca's server clock

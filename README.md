@@ -36,7 +36,7 @@ Each box in the diagram is one module:
 | Entry signal (market data) | `market_data.py` | OHLCV DataFrame for one symbol at a time, any bar timeframe |
 | Entry signal (analysis) | `signals.py` | RSI/ATR/MACD + event detection (gap, breakout, MACD cross) + entry gates (pure) |
 | Entry signal (decision) | `decision_layer.py` | LLM (OpenRouter) — or you, with `--manual-mode` — picks ≤1 entry from the event-firing candidates |
-| Option screener | `options_screener.py` | expiry pick, spread enumeration, liquidity filter, IV-skew ranking, order plans (pure) |
+| Option screener | `options_screener.py` | expiry pick, spread enumeration, liquidity filter, reward-to-risk ranking, order plans (pure) |
 | Risk manager + Position manager | `pos_and_risk.py` | leg pairing, mechanical exits, equity-relative sizing (pure) |
 | Execution + Account state | `broker.py` | all env/Alpaca access; `submit_paper_order` is the only submitting function |
 | wiring | `cli.py` | typer CLI + the cycle engine + loguru logging + JSONL journal |
@@ -72,12 +72,15 @@ All numbers below are the shipped `settings.yaml` defaults — change them there
   readings) and returns `{action, symbol, direction, thesis}`. Malformed output
   means no entry. Deterministic code picks everything else.
 - **Spread selection**: nearest expiry (weeklies included) with **≥5 DTE**;
-  candidate strike pairs within ±10% of spot, widths of 1–3 strike steps;
-  per-leg filter: open interest ≥ 100, fresh two-sided quote (≤10 s vs server
-  clock), leg spread ≤ 350 bps, implied volatility present; sanity
-  `0.05 ≤ net debit < width`; rank by **IV skew, flattest first** (ties →
-  higher combined open interest).
-- **Risk (from live equity, every cycle)**: per entry ≤ 0.5% of equity, new
+  strikes within ±10% of spot, OTM only plus the one ATM strike bracketing
+  spot; pair widths between **2% and 5% of spot**; per-leg filter: open
+  interest ≥ 100, fresh two-sided quote (within 10 s of the server clock),
+  leg spread ≤ 500 bps, implied volatility present; sanity
+  `0.05 ≤ net debit < width`; rank by **reward-to-risk**
+  `(width − debit) / debit`, highest first (ties → tighter combined leg
+  quotes). Full methodology and the alternatives considered:
+  [SPREAD_SELECTION.md](SPREAD_SELECTION.md).
+- **Risk (from live equity, every cycle)**: per entry ≤ 1% of equity, new
   premium per cycle ≤ 1%, total open premium at risk ≤ 10%. Unknown equity or
   unknown open risk refuses entries.
 - **Exits (mechanical only, before entries, every cycle)**: close the spread
