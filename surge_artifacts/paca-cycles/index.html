@@ -558,6 +558,11 @@ function bindTips(root) {
 let cycles = [];      // newest first
 let selected = 0;
 let realizedByOrder = new Map();  // exit client_order_id -> realized.json row, filled after boot
+let emaPeriods = null;            // {fast, slow} from config.json, labels the trend column
+
+// Signed dollar distance from a trend EMA, coloured by side (+ above / − below the anchor).
+const trendVal = (v) => v == null ? '<span class="empty">—</span>'
+  : `<span class="${v > 0 ? "pnl-pos" : v < 0 ? "pnl-neg" : ""}">${(v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2)}</span>`;
 
 function render() {
   const latest = cycles[0];
@@ -724,6 +729,7 @@ function renderDetail() {
       const rsi = x.rsi ?? null;
       const macd = x.macd_hist ?? null;
       const macdW = macd == null ? 0 : Math.abs(macd) / maxMacd * 50;
+      const emaF = x.ema_fast_dist ?? null, emaS = x.ema_slow_dist ?? null;
       const blocked = !!x.gate_block;
       return `<tr class="${blocked ? "blocked" : ""}">
         <td><span class="sym">${esc(x.symbol)}</span></td>
@@ -742,14 +748,18 @@ function renderDetail() {
                   : `<span class="bar" style="right:50%;width:${macdW}%;background:var(--div-neg)"></span>`}
               </div><span class="macd-val">${fmt(macd, 2)}</span></div></td>
         <td class="num">${fmt(x.atr, 2)}</td>
+        <td class="num">${emaF == null && emaS == null
+            ? '<span class="empty">—</span>'
+            : `<span data-tip="last close − trend EMA ($): fast ${fmt(emaF, 2)} · slow ${fmt(emaS, 2)} · + = above the anchor (up-regime) — advisory, not a gate">${trendVal(emaF)} / ${trendVal(emaS)}</span>`}</td>
         <td>${blocked
             ? `<span class="chip">✕ ${esc(x.gate_block)}</span>`
             : '<span class="ok-line">✓ eligible</span>'}</td>
       </tr>`;
     }).join("");
+    const trendHead = emaPeriods ? `EMA Δ ${emaPeriods.fast}/${emaPeriods.slow}` : "EMA Δ fast/slow";
     parts.push(`<div><div class="section-title">Candidates · ${c.candidates.length} scanned, ${c.candidates.filter(x => !x.gate_block).length} passed gates</div>
       <div class="tbl-scroll"><table>
-        <thead><tr><th>Symbol</th><th>Events</th><th>RSI</th><th>MACD hist</th><th>ATR</th><th>Gate</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Events</th><th>RSI</th><th>MACD hist</th><th>ATR</th><th>${trendHead}</th><th>Gate</th></tr></thead>
         <tbody>${rows}</tbody></table></div></div>`);
   }
 
@@ -959,6 +969,11 @@ const CONFIG_SECTIONS = [
     macd_slow: ["MACD slow EMA", String],
     macd_signal: ["MACD signal EMA", String],
     atr_event_mult: ["gap/breakout threshold", v => v + "× ATR"],
+    macd_min_hist_atr: ["MACD cross min |histogram|", v => v + "× ATR"],
+    rsi_overbought: ["RSI overbought (drops CALL entries)", v => "≥ " + v],
+    rsi_oversold: ["RSI oversold (drops PUT entries)", v => "≤ " + v],
+    trend_ema_fast: ["trend EMA fast (advisory)", v => v + " bars"],
+    trend_ema_slow: ["trend EMA slow (advisory)", v => v + " bars"],
     stale_bar_factor: ["stale-bar entry block", v => v + "× bar duration"],
     min_bars: ["min bars before trading", String],
   }},
@@ -974,6 +989,8 @@ const CONFIG_SECTIONS = [
     max_quote_age_seconds: ["max quote age", v => v + "s"],
     max_leg_spread_bps: ["max leg bid-ask spread", v => v + " bps"],
     min_net_debit: ["min net debit", v => "$" + fmt(v, 2) + "/share"],
+    min_debit_frac: ["min debit", v => (v * 100).toLocaleString() + "% of width"],
+    max_debit_frac: ["max debit", v => (v * 100).toLocaleString() + "% of width"],
   }},
   { key: "risk", title: "Risk limits (fractions of equity)", labels: {
     per_entry_fraction: ["one entry's debit", null],
@@ -1058,11 +1075,15 @@ Promise.all([
   renderConfig(cfg, acct?.equity ?? null);
   bindTips($("tab-positions"));
   bindTips($("tab-realized"));
-  // Exit cards in the cycle detail join realized fills by client_order_id; refresh the detail now that we have them.
+  if (cfg?.signals?.trend_ema_fast != null && cfg?.signals?.trend_ema_slow != null) {
+    emaPeriods = { fast: cfg.signals.trend_ema_fast, slow: cfg.signals.trend_ema_slow };
+  }
+  // Exit cards join realized fills by client_order_id; the trend column header uses
+  // the configured EMA periods — refresh the detail now that both are known.
   if (Array.isArray(realized)) {
     realizedByOrder = new Map(realized.filter(r => r.exit_order).map(r => [r.exit_order, r]));
-    if (cycles.length) { renderDetail(); bindTips($("detail")); }
   }
+  if (cycles.length) { renderDetail(); bindTips($("detail")); }
 });
 </script>
 </body>
