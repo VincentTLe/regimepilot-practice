@@ -22,6 +22,12 @@ spreads** as single multi-leg (MLEG) limit orders. Exits are purely mechanical.
 > (`src/regimepilot/`) was replaced with 7 flat modules. The old code lives in
 > git history.
 
+> **tape/paca branch (2026-09-02).** Same engine, four changes: the decider is
+> GLM on Featherless inside an autonomous loop, a deterministic **tape sensor**
+> (order-flow imbalance from IEX prints) confirms entries and reversal exits,
+> the loop survives crashes and serves a live local dashboard, and the Alpaca
+> CLI feeds the dashboard's broker snapshot. Details: [tape/paca](#tapepaca--the-tape-sensor-featherless-and-the-continuous-loop).
+
 ## Architecture
 
 ```mermaid
@@ -288,3 +294,53 @@ exit was planned but not sent — the default is a dry run) or `outcome: hold`
 every candidate, gate result, and the exact order plan that would have been
 submitted. Only when all of this looks right add `--execute` for a real paper
 order.
+
+## tape/paca — the tape sensor, Featherless, and the continuous loop
+
+This branch keeps the `dev/paca` engine (same screener, sizing, pre-order
+recheck, stop / take-profit / expiry exits, single submit chokepoint) and
+changes four things.
+
+**1. The decider is GLM on Featherless, inside the loop.** `settings.yaml`
+`llm:` points at `https://api.featherless.ai/v1`; `zai-org/GLM-5.3-Flash`
+(`reasoning_effort: low`) is tried first, `zai-org/GLM-5.3` next, then the
+cycle holds. `.env` needs `FEATHERLESS_API_KEY`; `cli.py preflight` makes one
+round trip and prints the model and its latency. `run` refuses to start in
+LLM mode without the key.
+
+**2. The tape sensor.** Every cycle reads the last 15 minutes of IEX trade
+prints per symbol (one request) and classifies each print by the tick rule
+(uptick = a buyer lifted the offer, downtick = a seller hit the bid).
+`flow_imbalance` = (buy − sell) / (buy + sell), in −1…+1, is journaled per
+candidate with the print count and the L1 size skew, and shown to the decider.
+Measured on 2026-09-02 the reading tracks the same-bar move (SPY corr +0.50)
+and does not forecast the next bar, so it confirms and vetoes, never predicts:
+
+- entry gate: CALL events need flow ≥ +`flow_min_imbalance` (0.15), PUT events
+  ≤ −0.15; fewer than `flow_min_trades` (50) prints → `flow_unknown`, no entry;
+- reversal exit: the opposing event must be backed by the tape against the
+  spread for `flow_exit_bars` (2) consecutive cycles (`exits.reversal_needs_flow`);
+  an unknown tape falls back to the event-only rule, so no position is ever
+  held on missing data. Stop, take-profit and expiry exits are untouched;
+- `flow_min_imbalance: 0` and `reversal_needs_flow: false` restore `dev/paca`.
+
+**3. Continuous loop with a live dashboard.**
+
+```bash
+uv run --env-file .env cli.py preflight                        # settings, keys, Alpaca, Featherless ping
+uv run --env-file .env cli.py flow                             # tape read-out now (or --at "2026-09-02 19:45", UTC)
+uv run --env-file .env cli.py run --manual-mode --dashboard    # one dry-run cycle + dashboard export
+uv run --env-file .env cli.py run --execute --loop --dashboard # autonomous paper trading, every 5 min
+```
+
+With `--loop --dashboard` the pages are served at http://localhost:8080/paca-cycles/
+and http://localhost:8080/paca-candles/ and re-exported after every cycle (they
+reload every 60 s; add `#nolive` to the URL to stop that). A crashing cycle is
+journaled as `outcome: error` and the loop continues; Ctrl+C stops it. Set
+`SURGE_DOMAIN_CYCLES` / `SURGE_DOMAIN_CANDLES` in `.env` (after
+`npm i -g surge && surge login`) to push both pages after every cycle.
+
+**4. Alpaca CLI.** The dashboard export reads the clock, account and positions
+through the Alpaca CLI (`alpaca clock`, `alpaca account get`, `alpaca position list`,
+profile from `ALPACA_CLI_PROFILE`) into `cli_snapshot.json`, shown as a strip on
+the cycles page. Orders still go only through `broker.submit_paper_order`.

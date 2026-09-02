@@ -1,13 +1,13 @@
 ---
 name: paca-agent
-description: Run one full PACA trading cycle with Claude acting as the momentum-trader entry decider (instead of the OpenRouter LLM), then redeploy the surge cycle dashboard. Use this whenever the user asks to "run a cycle", "run the agent", "run paca", "run the system", "make a trade decision", or wants the dashboard refreshed after a cycle — even if they don't say "paca-agent" explicitly.
+description: Run one full PACA trading cycle with Claude acting as the momentum-trader entry decider (instead of the Featherless LLM), then redeploy the surge cycle dashboard. Use this whenever the user asks to "run a cycle", "run the agent", "run paca", "run the system", "make a trade decision", or wants the dashboard refreshed after a cycle — even if they don't say "paca-agent" explicitly.
 ---
 
 # PACA Agent Cycle
 
 Run one cycle of PACA end-to-end: gather signals, decide the entry yourself as a disciplined momentum trader, execute via `cli.py run --manual-mode --execute`, then redeploy the dashboard with `surge_artifacts/paca-cycles/deploy.sh`.
 
-You are the decision layer here. The OpenRouter LLM is never called — manual mode reads the pick from stdin, and you supply it. Everything else (screening, sizing, risk caps, exits, order placement) stays deterministic code; you never bypass it.
+You are the decision layer here. The Featherless LLM is never called — manual mode reads the pick from stdin, and you supply it. Everything else (screening, sizing, risk caps, exits, order placement) stays deterministic code; you never bypass it.
 
 ## Guardrails
 
