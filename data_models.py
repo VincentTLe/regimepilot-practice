@@ -62,6 +62,22 @@ class Event:
 
 
 @dataclass(frozen=True)
+class SpotQuote:
+    """Underlying top-of-book quote; sizes feed the tape sensor (advisory L1 skew)."""
+
+    bid: float | None
+    ask: float | None
+    bid_size: float | None = None
+    ask_size: float | None = None
+
+    @property
+    def mid(self) -> float | None:
+        if self.bid and self.ask and 0 < self.bid <= self.ask:
+            return (self.bid + self.ask) / 2
+        return None
+
+
+@dataclass(frozen=True)
 class SymbolFeatures:
     symbol: str
     mid: float | None  # underlying quote midpoint
@@ -74,6 +90,9 @@ class SymbolFeatures:
     ema_fast_dist: float | None = None  # close − fast trend EMA ($): advisory, never a gate
     ema_slow_dist: float | None = None  # close − slow trend EMA ($): advisory, never a gate
     held: str | None = None  # "CALL"/"PUT" when a spread is already held: a new entry is an add
+    flow_imbalance: float | None = None  # tape: tick-rule (buy − sell)/(buy + sell) over the last minutes of prints
+    flow_trades: int | None = None  # prints behind flow_imbalance (None = tape not read)
+    l1_imbalance: float | None = None  # top-of-book (bid − ask)/(bid + ask) size skew: advisory only
 
 
 @dataclass(frozen=True)

@@ -34,7 +34,11 @@ Each candidate also carries its RSI, ATR and MACD histogram readings, plus
 advisory trend context: ema_fast_dist / ema_slow_dist are the last close minus
 a fast/slow trend EMA (positive = price above the anchor, an up-regime;
 negative = below). Weigh trend alignment - entering against both anchors needs
-a strong reason. A candidate whose "held" field is set already has an open
+a strong reason. flow_imbalance is the tape: tick-rule buy volume minus sell
+volume over their sum for the last minutes of prints (-1 = every print hit the
+bid, +1 = every print lifted the offer), with flow_trades prints behind it. The
+candidate's events already agree with the tape; a weak reading (|flow| below
+0.3) or few prints is a reason to pass rather than chase. A candidate whose "held" field is set already has an open
 spread in that direction: entering it is an ADD to that position, and your
 direction must match it (code rejects any other direction). Choose at most
 ONE candidate from this list to enter, or pass. Once an entry is placed you may
@@ -190,6 +194,8 @@ def decide_entry(
                 "macd_hist": c.macd_hist,
                 "ema_fast_dist": c.ema_fast_dist,
                 "ema_slow_dist": c.ema_slow_dist,
+                "flow_imbalance": c.flow_imbalance,
+                "flow_trades": c.flow_trades,
                 "held": c.held,
             }
             for c in tradeable
@@ -230,7 +236,8 @@ def manual_decide(
         echo(
             f"  [{index}] {c.symbol:<6} spot={c.mid} events={events} "
             f"rsi={c.rsi} atr={c.atr} macd_hist={c.macd_hist} "
-            f"ema_fast_dist={c.ema_fast_dist} ema_slow_dist={c.ema_slow_dist}"
+            f"ema_fast_dist={c.ema_fast_dist} ema_slow_dist={c.ema_slow_dist} "
+            f"flow={c.flow_imbalance} ({c.flow_trades} prints)"
             + (f" held={c.held} (add)" if c.held else "")
         )
     try:

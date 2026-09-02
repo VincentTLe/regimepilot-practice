@@ -731,6 +731,18 @@ function renderDetail() {
     parts.push(`<div class="legacy-note">Logged under the earlier verbose schema — candidate and screening detail isn’t comparable, so only the summary fields are shown.</div>`);
   }
 
+  // tape sensor: tick-rule aggressor imbalance over the last minutes of IEX prints
+  function flowCell(x) {
+    const f = x.flow_imbalance;
+    if (f == null) {
+      return x.flow_trades != null
+        ? `<span class="empty" data-tip="too few prints (${x.flow_trades}) to read the tape">?</span>`
+        : '<span class="empty">—</span>';
+    }
+    const color = f > 0.15 ? "var(--div-pos)" : f < -0.15 ? "var(--div-neg)" : "inherit";
+    return `<span style="color:${color}" data-tip="tape: buy minus sell volume over total, last minutes of IEX prints (${x.flow_trades ?? "?"} trades); + = buyers lifting offers, − = sellers hitting bids">${f > 0 ? "+" : ""}${Math.round(f * 100)}%</span>`;
+  }
+
   // candidates table
   if (c.candidates.length) {
     const maxMacd = Math.max(...c.candidates.map(x => Math.abs(x.macd_hist ?? 0)), 1e-9);
@@ -760,6 +772,7 @@ function renderDetail() {
         <td class="num">${emaF == null && emaS == null
             ? '<span class="empty">—</span>'
             : `<span data-tip="last close − trend EMA ($): fast ${fmt(emaF, 2)} · slow ${fmt(emaS, 2)} · + = above the anchor (up-regime) — advisory, not a gate">${trendVal(emaF)} / ${trendVal(emaS)}</span>`}</td>
+        <td class="num">${flowCell(x)}</td>
         <td>${blocked
             ? `<span class="chip">✕ ${esc(x.gate_block)}</span>`
             : '<span class="ok-line">✓ eligible</span>'}</td>
@@ -768,7 +781,7 @@ function renderDetail() {
     const trendHead = emaPeriods ? `EMA Δ ${emaPeriods.fast}/${emaPeriods.slow}` : "EMA Δ fast/slow";
     parts.push(`<div><div class="section-title">Candidates · ${c.candidates.length} scanned, ${c.candidates.filter(x => !x.gate_block).length} passed gates</div>
       <div class="tbl-scroll"><table>
-        <thead><tr><th>Symbol</th><th>Events</th><th>RSI</th><th>MACD hist</th><th>ATR</th><th>${trendHead}</th><th>Gate</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Events</th><th>RSI</th><th>MACD hist</th><th>ATR</th><th>${trendHead}</th><th>Flow</th><th>Gate</th></tr></thead>
         <tbody>${rows}</tbody></table></div></div>`);
   }
 
@@ -1081,7 +1094,21 @@ Promise.all([
   fetch("config.json", { cache: "no-store" }).then(asJson).catch(() => null),
   fetch("positions.json", { cache: "no-store" }).then(asJson).catch(() => null),
   fetch("realized.json", { cache: "no-store" }).then(asJson).catch(() => null),
-]).then(([acct, cfg, positions, realized]) => {
+  fetch("cli_snapshot.json", { cache: "no-store" }).then(asJson).catch(() => null),
+]).then(([acct, cfg, positions, realized, cliSnap]) => {
+  // Broker state read through the Alpaca CLI by the loop's dashboard export (hackathon: MCP or CLI).
+  if (cliSnap && cliSnap.source === "alpaca-cli") {
+    const a = cliSnap.account || {}, ck = cliSnap.clock || {};
+    const strip = document.createElement("div");
+    strip.style.cssText = "font: 12px/1.4 ui-monospace, Consolas, monospace; padding: 6px 14px; border-bottom: 1px solid var(--line, #ccc); color: var(--muted, #666); display:flex; gap:18px; flex-wrap:wrap;";
+    strip.innerHTML = `<span><b>via Alpaca CLI</b>${cliSnap.profile ? ` (profile ${esc(cliSnap.profile)})` : ""}</span>
+      <span>market ${ck.is_open === true ? "open" : ck.is_open === false ? "closed" : "?"}</span>
+      <span>account ${esc(String(a.account_number ?? "?"))} · status ${esc(String(a.status ?? "?"))}</span>
+      <span>equity ${a.equity != null ? fmtUsd(Number(a.equity)) : "?"}</span>
+      <span>${(cliSnap.positions || []).length} open contracts</span>
+      <span>read ${esc(String(cliSnap.generated_at ?? ""))}</span>`;
+    document.body.prepend(strip);
+  }
   renderPositions(acct, Array.isArray(positions) ? positions : null);
   renderRealized(Array.isArray(realized) ? realized : null);
   renderConfig(cfg, acct?.equity ?? null);
@@ -1097,6 +1124,9 @@ Promise.all([
   }
   if (cycles.length) { renderDetail(); bindTips($("detail")); }
 });
+// Live monitoring: the loop rewrites the data files after every cycle; reload every
+// 60 s unless the URL carries #nolive (the hash, e.g. #cycle=..., survives the reload).
+if (!location.hash.includes("nolive")) setTimeout(() => location.reload(), 60000);
 </script>
 </body>
 </html>

@@ -10,6 +10,14 @@ NOW = datetime(2026, 8, 31, 15, 0, tzinfo=timezone.utc)
 BAR_SECONDS = 900  # 15m
 
 
+@pytest.fixture(autouse=True)
+def tape_gate_off(monkeypatch):
+    """The indicator/event tests predate the tape sensor; its gate is exercised separately."""
+    import settings
+
+    monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.0)
+
+
 def frame(rows: list[dict], *, end: datetime | None = None) -> pd.DataFrame:
     """OHLCV frame with 15m bar-start stamps ending at `end` (a completed bar)."""
     end = end if end is not None else NOW - timedelta(seconds=BAR_SECONDS)
@@ -236,3 +244,40 @@ def test_build_candidates_gates_exhausted_symbol_but_exits_see_raw_events(monkey
     assert candidate.events == ()  # not offered for entry
     # the raw features are untouched: the exit path (reversal) still sees the event
     assert features["SPY"].events == (call,)
+
+
+# --- tape gates (entry candidacy only) ---
+
+def features_with_flow(symbol, imbalance, trades):
+    from dataclasses import replace
+
+    from data_models import Event
+
+    base = SymbolFeatures(
+        symbol=symbol, mid=100.0, rsi=55.0, atr=1.0, macd_hist=0.1,
+        events=(Event(kind="breakout_up", direction="CALL"),), bar_age_seconds=1.0,
+    )
+    return replace(base, flow_imbalance=imbalance, flow_trades=trades)
+
+
+def test_build_candidates_flow_gates(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.15)
+    by_symbol = {
+        "SPY": features_with_flow("SPY", 0.4, 200),
+        "QQQ": features_with_flow("QQQ", -0.4, 200),
+        "IWM": features_with_flow("IWM", None, 10),
+    }
+    out = {c.symbol: c for c in signals.build_candidates(by_symbol, True, BAR_SECONDS)}
+    assert out["SPY"].gate_block is None and out["SPY"].flow_imbalance == 0.4 and out["SPY"].flow_trades == 200
+    assert out["QQQ"].gate_block == "flow_disagree" and out["QQQ"].events == ()
+    assert out["IWM"].gate_block == "flow_unknown"
+
+
+def test_build_candidates_flow_gate_off_at_zero_threshold(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.0)
+    out = signals.build_candidates({"IWM": features_with_flow("IWM", None, 0)}, True, BAR_SECONDS)
+    assert out[0].gate_block is None and len(out[0].events) == 1

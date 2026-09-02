@@ -87,7 +87,8 @@ _TOP_KEYS = {"symbols", "bar_timeframe", "loop_interval_seconds",
 _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_signal",
                 "atr_event_mult", "stale_bar_factor", "min_bars",
                 "macd_min_hist_atr", "rsi_overbought", "rsi_oversold",
-                "trend_ema_fast", "trend_ema_slow"}
+                "trend_ema_fast", "trend_ema_slow",
+                "flow_lookback_minutes", "flow_min_trades", "flow_min_imbalance", "flow_exit_bars"}
 _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
                   "strike_band_pct", "otm_only", "min_width_pct", "max_width_pct",
                   "min_open_interest", "max_quote_age_seconds", "max_leg_spread_bps",
@@ -95,7 +96,7 @@ _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
                   "min_debit_frac", "max_debit_frac"}
 _RISK_KEYS = {"per_entry_fraction", "per_underlying_fraction", "per_cycle_fraction",
               "total_fraction", "allow_stacking"}
-_EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit"}
+_EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit", "reversal_needs_flow"}
 _LLM_KEYS = {"provider", "base_url", "primary_model", "fallback_models",
              "reasoning_effort", "timeout_seconds", "json_mode"}
 _REASONING_EFFORTS = ("low", "high", "max")
@@ -142,6 +143,10 @@ def validate(raw: object) -> dict[str, object]:
     values["TREND_EMA_SLOW"] = _integer(sig, "signals", "trend_ema_slow", 1)
     if values["TREND_EMA_FAST"] >= values["TREND_EMA_SLOW"]:
         _fail("signals.trend_ema_fast", "must be smaller than trend_ema_slow", sig["trend_ema_fast"])
+    values["FLOW_LOOKBACK_MINUTES"] = _integer(sig, "signals", "flow_lookback_minutes", 1)
+    values["FLOW_MIN_TRADES"] = _integer(sig, "signals", "flow_min_trades", 0)
+    values["FLOW_MIN_IMBALANCE"] = _number(sig, "signals", "flow_min_imbalance", 0, 1)
+    values["FLOW_EXIT_BARS"] = _integer(sig, "signals", "flow_exit_bars", 1)
 
     scr = _section(raw, "screener", _SCREENER_KEYS)
     values["MIN_DTE"] = _integer(scr, "screener", "min_dte", 1)
@@ -188,6 +193,9 @@ def validate(raw: object) -> dict[str, object]:
     if not isinstance(exits["reversal_exit"], bool):
         _fail("exits.reversal_exit", "must be true or false", exits["reversal_exit"])
     values["REVERSAL_EXIT"] = exits["reversal_exit"]
+    if not isinstance(exits["reversal_needs_flow"], bool):
+        _fail("exits.reversal_needs_flow", "must be true or false", exits["reversal_needs_flow"])
+    values["REVERSAL_NEEDS_FLOW"] = exits["reversal_needs_flow"]
 
     llm = _section(raw, "llm", _LLM_KEYS)
     provider = llm["provider"]
@@ -250,6 +258,10 @@ RSI_OVERBOUGHT: float = _VALUES["RSI_OVERBOUGHT"]  # type: ignore[assignment]
 RSI_OVERSOLD: float = _VALUES["RSI_OVERSOLD"]  # type: ignore[assignment]
 TREND_EMA_FAST: int = _VALUES["TREND_EMA_FAST"]  # type: ignore[assignment]
 TREND_EMA_SLOW: int = _VALUES["TREND_EMA_SLOW"]  # type: ignore[assignment]
+FLOW_LOOKBACK_MINUTES: int = _VALUES["FLOW_LOOKBACK_MINUTES"]  # type: ignore[assignment]
+FLOW_MIN_TRADES: int = _VALUES["FLOW_MIN_TRADES"]  # type: ignore[assignment]
+FLOW_MIN_IMBALANCE: float = _VALUES["FLOW_MIN_IMBALANCE"]  # type: ignore[assignment]
+FLOW_EXIT_BARS: int = _VALUES["FLOW_EXIT_BARS"]  # type: ignore[assignment]
 MIN_DTE: int = _VALUES["MIN_DTE"]  # type: ignore[assignment]
 MAX_EXPIRY_LOOKAHEAD_DAYS: int = _VALUES["MAX_EXPIRY_LOOKAHEAD_DAYS"]  # type: ignore[assignment]
 EXPIRIES_TO_SCREEN: int = _VALUES["EXPIRIES_TO_SCREEN"]  # type: ignore[assignment]
@@ -273,6 +285,7 @@ STOP_FRACTION: float = _VALUES["STOP_FRACTION"]  # type: ignore[assignment]
 TAKE_PROFIT_MULT: float = _VALUES["TAKE_PROFIT_MULT"]  # type: ignore[assignment]
 EXIT_DTE: int = _VALUES["EXIT_DTE"]  # type: ignore[assignment]
 REVERSAL_EXIT: bool = _VALUES["REVERSAL_EXIT"]  # type: ignore[assignment]
+REVERSAL_NEEDS_FLOW: bool = _VALUES["REVERSAL_NEEDS_FLOW"]  # type: ignore[assignment]
 LLM_PROVIDER: str = _VALUES["LLM_PROVIDER"]  # type: ignore[assignment]
 LLM_BASE_URL: str = _VALUES["LLM_BASE_URL"]  # type: ignore[assignment]
 PRIMARY_MODEL: str = _VALUES["PRIMARY_MODEL"]  # type: ignore[assignment]

@@ -22,6 +22,10 @@ signals:                     # technical analysis + entry events
   rsi_oversold: 30           # entries only: drop PUT events at/below this RSI (exhausted down-move)
   trend_ema_fast: 25         # advisory trend anchor, bars (~2h on 5m): journaled + shown to the decider, NOT a gate
   trend_ema_slow: 50         # advisory trend anchor, bars (~4h on 5m): journaled + shown to the decider, NOT a gate
+  flow_lookback_minutes: 15  # tape sensor: minutes of IEX trade prints behind flow_imbalance (tick rule)
+  flow_min_trades: 50        # fewer prints than this = flow unknown -> entries gate flow_unknown (thin names)
+  flow_min_imbalance: 0.15   # entry gate: CALL events need flow >= +this, PUT events <= -this; 0 = tape gate off
+  flow_exit_bars: 2          # reversal exit also needs flow against the spread on this many consecutive cycles
   stale_bar_factor: 2.0      # block entries when the last bar is older than this many bar durations
   min_bars: 40               # completed bars required before indicators count (>= macd_slow + macd_signal)
 
@@ -53,6 +57,7 @@ exits:                       # mechanical, checked every cycle — the LLM is ne
   take_profit_mult: 3.0      # take-profit: exit when net mark >= this multiple of entry debit (2.0 = +100%)
   exit_dte: 2                # always exit at this many days to expiration or fewer
   reversal_exit: true        # close a spread when an entry event fires AGAINST it (e.g. gap_down while holding a call spread)
+  reversal_needs_flow: true  # ...but only once the tape has been against the spread for signals.flow_exit_bars cycles; false = event alone (dev/paca rule)
 
 llm:                         # OpenAI-compatible chat endpoint for the entry decision (skipped with --manual-mode)
   provider: featherless      # label only (logs, preflight); the key comes from FEATHERLESS_API_KEY in .env

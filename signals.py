@@ -20,11 +20,14 @@ exits keep seeing the unfiltered events via SymbolFeatures.events.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from datetime import datetime
 
 import pandas as pd
 
 import settings
+import tape
 from data_models import Event, SymbolFeatures
 
 
@@ -95,8 +98,11 @@ def build_signal(
     mid: float | None,
     now: datetime,
     bar_seconds: int,
+    flow: tape.FlowStats | None = None,
+    l1_imbalance: float | None = None,
 ) -> SymbolFeatures:
-    """Indicator readings + events for one symbol from its completed-bars frame."""
+    """Indicator readings + events for one symbol from its completed-bars frame,
+    plus the tape sensor reading when the caller measured one."""
     enough = len(df) >= settings.MIN_BARS
     bar_age = None
     if len(df) > 0:
@@ -122,6 +128,9 @@ def build_signal(
         bar_age_seconds=bar_age,
         ema_fast_dist=_dist("ema_fast"),
         ema_slow_dist=_dist("ema_slow"),
+        flow_imbalance=flow.imbalance if flow is not None else None,
+        flow_trades=flow.trades if flow is not None else None,
+        l1_imbalance=l1_imbalance,
     )
 
 
@@ -170,8 +179,11 @@ def build_candidates(
 ) -> list[SymbolFeatures]:
     """Gate every symbol; return all of them with gate_block filled in.
 
-    Candidates carry the RSI-filtered entry events; a symbol whose events all
-    fall to the exhaustion filter gates as rsi_exhausted.
+    Candidates carry the RSI-filtered, tape-confirmed entry events: a symbol
+    whose events all fall to the exhaustion filter gates as rsi_exhausted; with
+    the tape gate on (FLOW_MIN_IMBALANCE > 0) a symbol whose tape could not be
+    read gates as flow_unknown, and one whose events the tape contradicts as
+    flow_disagree. Exits keep reading the raw SymbolFeatures.events upstream.
     """
     out = []
     for symbol in sorted(features_by_symbol):
@@ -180,18 +192,15 @@ def build_candidates(
         block = features.gate_block or gate_block(features, market_is_open, bar_seconds)
         if block is None and features.events and not tradeable_events:
             block = "rsi_exhausted"
-        out.append(
-            SymbolFeatures(
-                symbol=features.symbol,
-                mid=features.mid,
-                rsi=features.rsi,
-                atr=features.atr,
-                macd_hist=features.macd_hist,
-                events=tradeable_events,
-                bar_age_seconds=features.bar_age_seconds,
-                gate_block=block,
-                ema_fast_dist=features.ema_fast_dist,
-                ema_slow_dist=features.ema_slow_dist,
-            )
-        )
+        if block is None and tradeable_events and settings.FLOW_MIN_IMBALANCE > 0:
+            if features.flow_imbalance is None:
+                block = "flow_unknown"
+                tradeable_events = ()
+            else:
+                tradeable_events = tape.entry_flow_events(
+                    tradeable_events, features.flow_imbalance, settings.FLOW_MIN_IMBALANCE
+                )
+                if not tradeable_events:
+                    block = "flow_disagree"
+        out.append(replace(features, events=tradeable_events, gate_block=block))
     return out

@@ -202,10 +202,16 @@ def breakout_bars(count: int = 60, direction: str = "up", **kwargs) -> list[Simp
 
 
 class FakeStockDataClient:
-    def __init__(self, bars_by_symbol=None, quotes_by_symbol=None, bars_error=None):
+    """quotes_by_symbol values: (bid, ask) or (bid, ask, bid_size, ask_size);
+    trades_by_symbol values: [(price, size, timestamp), ...] in time order."""
+
+    def __init__(self, bars_by_symbol=None, quotes_by_symbol=None, bars_error=None,
+                 trades_by_symbol=None, trades_error=None):
         self.bars_by_symbol = bars_by_symbol or {}
         self.quotes_by_symbol = quotes_by_symbol or {}
         self.bars_error = bars_error
+        self.trades_by_symbol = trades_by_symbol or {}
+        self.trades_error = trades_error
 
     def get_stock_bars(self, request):
         if self.bars_error is not None:
@@ -213,10 +219,21 @@ class FakeStockDataClient:
         return SimpleNamespace(data=self.bars_by_symbol)
 
     def get_stock_latest_quote(self, request):
-        return {
-            symbol: SimpleNamespace(bid_price=bid, ask_price=ask)
-            for symbol, (bid, ask) in self.quotes_by_symbol.items()
-        }
+        out = {}
+        for symbol, quote in self.quotes_by_symbol.items():
+            bid, ask = quote[0], quote[1]
+            bid_size = quote[2] if len(quote) > 2 else 100
+            ask_size = quote[3] if len(quote) > 3 else 100
+            out[symbol] = SimpleNamespace(bid_price=bid, ask_price=ask, bid_size=bid_size, ask_size=ask_size)
+        return out
+
+    def get_stock_trades(self, request):
+        if self.trades_error is not None:
+            raise self.trades_error
+        return SimpleNamespace(data={
+            symbol: [SimpleNamespace(price=p, size=s, timestamp=t) for p, s, t in rows]
+            for symbol, rows in self.trades_by_symbol.items()
+        })
 
 
 class FakeOptionDataClient:

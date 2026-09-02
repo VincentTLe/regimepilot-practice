@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import sys
 import time
+from collections import deque
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ import typer
 from loguru import logger
 
 import broker
+import dashboard
 import decision_layer
 import market_data
 import options_screener
@@ -27,6 +29,7 @@ import pos_and_risk
 import settings
 import signals
 import sounds
+import tape
 from data_models import (
     Config,
     EntryChoice,
@@ -44,13 +47,21 @@ MIN_OPTIONS_LEVEL = 3  # spreads need Alpaca options trading level 3
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
-def setup_logging() -> None:
+def setup_logging(file_sink: bool = False) -> None:
     logger.remove()
     logger.add(
         sys.stderr,
         level="INFO",
         format="<green>{time:HH:mm:ss}</green> | <level>{level: <7}</level> | <level>{message}</level>",
     )
+    if file_sink:  # the continuous loop keeps a daily file (logs/ is git-ignored)
+        logger.add(
+            Path("logs") / "paca_{time:YYYYMMDD}.log",
+            level="INFO",
+            rotation="1 day",
+            retention="14 days",
+            encoding="utf-8",
+        )
 
 
 def append_journal(record: dict) -> None:
@@ -124,8 +135,14 @@ def run_cycle(
     execute: bool,
     manual_mode: bool,
     llm_transport: object | None = None,
+    flow_state: dict[str, deque] | None = None,
 ) -> dict:
-    """One full cycle. Returns the journal record (also appended to the journal)."""
+    """One full cycle. Returns the journal record (also appended to the journal).
+
+    `flow_state` keeps the last FLOW_EXIT_BARS tape readings per underlying
+    across cycles (the loop passes one dict for its lifetime); a reversal exit
+    needs the tape against the spread for that many consecutive cycles.
+    """
     started = datetime.now(timezone.utc)
     cycle_id = started.strftime("%Y%m%d-%H%M%S")
     record: dict = {"cycle_id": cycle_id, "started_at": started, "dry_run": not execute}
@@ -172,18 +189,31 @@ def run_cycle(
         dict.fromkeys(config.symbols + tuple(s.underlying for s in spreads))
     )
     try:
-        mids = broker.fetch_spot_mids(stock_data, watch_symbols)
+        quotes = broker.fetch_spot_quotes(stock_data, watch_symbols)
+        mids = {symbol: quote.mid for symbol, quote in quotes.items()}
     except broker.BrokerError as error:
         # Exits must still run on a quote outage; entries will gate out naturally.
         logger.error("quote read failed, exits still run, entries blocked: {}", error)
+        quotes = {}
         mids = {symbol: None for symbol in watch_symbols}
+    try:
+        trades = broker.fetch_recent_trades(
+            stock_data, watch_symbols, settings.FLOW_LOOKBACK_MINUTES, clock.server_time
+        )
+    except broker.BrokerError as error:
+        # The tape is a confirmation, never a substitute: unknown flow gates entries
+        # (flow_unknown) and leaves the reversal exit on the event-only rule.
+        logger.warning("trades read failed, tape unknown this cycle: {}", error)
+        trades = {}
     features = _build_trading_signals(
-        watch_symbols, config, stock_data, mids, clock.server_time
+        watch_symbols, config, stock_data, mids, clock.server_time, trades=trades, quotes=quotes
     )
 
     # --- Position manager: mechanical exits run before entries and are never gated ---
     exits: list[dict] = []
     exiting: set[str] = set()  # underlyings with an exit this cycle: never add to those
+    flow_holds: list[str] = []  # reversals held back because the tape lacks conviction
+    tape_updated: set[str] = set()  # one tape reading per underlying per cycle
     if spreads:
         leg_symbols = [
             s for spread in spreads for s in (spread.long_symbol, spread.short_symbol)
@@ -200,12 +230,37 @@ def run_cycle(
             short_q = broker.leg_quote_from_snapshot(
                 spread.short_symbol, 0.0, snapshots.get(spread.short_symbol), None
             )
-            opposing = (
-                spread.underlying in features
-                and pos_and_risk.opposing_event_fired(
-                    spread, features[spread.underlying].events
-                )
+            symbol_features = features.get(spread.underlying)
+            opposing_event = symbol_features is not None and pos_and_risk.opposing_event_fired(
+                spread, symbol_features.events
             )
+            flow_now = symbol_features.flow_imbalance if symbol_features is not None else None
+            against = None
+            streak = 0
+            if flow_state is not None:
+                readings = flow_state.setdefault(
+                    spread.underlying, deque(maxlen=settings.FLOW_EXIT_BARS)
+                )
+                if spread.underlying not in tape_updated:
+                    readings.append(flow_now)
+                    tape_updated.add(spread.underlying)
+                against = tape.flow_against(
+                    spread.option_type, list(readings), settings.FLOW_EXIT_BARS, settings.FLOW_MIN_IMBALANCE
+                )
+                streak = tape.opposing_streak(spread.option_type, list(readings), settings.FLOW_MIN_IMBALANCE)
+            # Reversal needs the event AND (when required) the tape against the spread
+            # for FLOW_EXIT_BARS cycles. Unknown tape (None) or no state at all falls
+            # back to the event-only rule: never hold a position on missing data.
+            opposing = opposing_event and (
+                not settings.REVERSAL_NEEDS_FLOW or flow_state is None or against is None or against
+            )
+            if opposing_event and not opposing:
+                note = (
+                    f"{spread.underlying} {spread.expiration} {spread.option_type}: "
+                    f"opposing event, tape streak {streak}/{settings.FLOW_EXIT_BARS}"
+                )
+                flow_holds.append(note)
+                logger.info("reversal held back: {}", note)
             decision = pos_and_risk.exit_decision(
                 spread,
                 long_q,
@@ -224,6 +279,8 @@ def run_cycle(
                 "spread": f"{spread.underlying} {spread.expiration} {spread.option_type}",
                 "reason": decision.reason,
                 "net_mark": decision.net_mark,
+                "flow_imbalance": flow_now,
+                "flow_against": against,
             }
             if {spread.long_symbol, spread.short_symbol} & account.open_order_symbols:
                 entry["skipped"] = "pending_order"
@@ -243,6 +300,7 @@ def run_cycle(
                 entry.get("receipt", entry.get("skipped")),
             )
     record["exits"] = exits
+    record["flow_holds"] = flow_holds
 
     # --- Entry candidates: whitelist symbols only ---
     whitelist_features = {symbol: features[symbol] for symbol in config.symbols}
@@ -276,6 +334,9 @@ def run_cycle(
             "macd_hist": c.macd_hist,
             "ema_fast_dist": c.ema_fast_dist,
             "ema_slow_dist": c.ema_slow_dist,
+            "flow_imbalance": c.flow_imbalance,
+            "flow_trades": c.flow_trades,
+            "l1_imbalance": c.l1_imbalance,
             "held": c.held,
             "gate_block": c.gate_block,
         }
@@ -384,21 +445,31 @@ def _build_trading_signals(
     stock_data: object,
     mids: dict,
     now: datetime,
+    trades: dict | None = None,
+    quotes: dict | None = None,
 ) -> dict[str, SymbolFeatures]:
-    """Create the trading signals: OHLCV -> RSI/ATR/MACD -> events, per symbol.
+    """Create the trading signals: OHLCV -> RSI/ATR/MACD -> events, per symbol,
+    plus the tape reading (tick-rule imbalance over `trades`, L1 skew from `quotes`).
 
     A failed symbol is marked data_error and skipped, never invented — one bad
     symbol must not kill the cycle.
     """
     features: dict[str, SymbolFeatures] = {}
     for symbol in symbols:
+        flow = (
+            tape.tick_rule(trades.get(symbol, []), settings.FLOW_MIN_TRADES)
+            if trades is not None
+            else None
+        )
+        quote = (quotes or {}).get(symbol)
+        l1 = tape.l1_imbalance(quote.bid_size, quote.ask_size) if quote is not None else None
         try:
             frame = market_data.fetch_ohlcv(
                 stock_data, symbol, config.bar_timeframe, now
             )
             frame = signals.add_indicators(frame)
             features[symbol] = signals.build_signal(
-                symbol, frame, mids.get(symbol), now, config.bar_seconds
+                symbol, frame, mids.get(symbol), now, config.bar_seconds, flow=flow, l1_imbalance=l1
             )
         except market_data.MarketDataError as error:
             logger.warning("{}", error)
@@ -643,6 +714,44 @@ def _check_fills(trading: object, pending: dict[str, str]) -> None:
         logger.info("awaiting fill: {}", ", ".join(pending.values()))
 
 
+def _safe_cycle(
+    config: Config,
+    trading: object,
+    stock_data: object,
+    option_data: object,
+    *,
+    execute: bool,
+    manual_mode: bool,
+    **kwargs,
+) -> dict:
+    """run_cycle that never raises: a crash is journaled as outcome=error so
+    --loop keeps going. The traceback is reduced to type + location (loguru's
+    diagnose output would print frame variables, credentials included)."""
+    try:
+        return run_cycle(
+            config, trading, stock_data, option_data,
+            execute=execute, manual_mode=manual_mode, **kwargs,
+        )
+    except KeyboardInterrupt:
+        raise
+    except Exception as error:  # noqa: BLE001 - the loop must survive anything
+        tb = error.__traceback__
+        while tb is not None and tb.tb_next is not None:
+            tb = tb.tb_next
+        where = f"{Path(tb.tb_frame.f_code.co_filename).name}:{tb.tb_lineno}" if tb else "?"
+        logger.error("cycle crashed: {} at {}", type(error).__name__, where)
+        started = datetime.now(timezone.utc)
+        record = {
+            "cycle_id": started.strftime("%Y%m%d-%H%M%S"),
+            "started_at": started,
+            "dry_run": not execute,
+            "outcome": "error",
+            "error": type(error).__name__,
+        }
+        append_journal(record)
+        return record
+
+
 @app.command()
 def run(
     execute: bool = typer.Option(
@@ -655,10 +764,19 @@ def run(
     interval: int = typer.Option(
         settings.LOOP_INTERVAL_SECONDS, help="Seconds between cycles with --loop."
     ),
+    with_dashboard: bool = typer.Option(
+        False, "--dashboard",
+        help="Refresh the dashboard data after every cycle; with --loop also serve it locally.",
+    ),
+    serve_port: int = typer.Option(8080, help="Local port for the dashboard pages (--loop --dashboard)."),
 ) -> None:
     """Run one trading cycle (or loop). Paper only; dry run unless --execute."""
-    setup_logging()
+    setup_logging(file_sink=True)
     config, trading, stock_data, option_data = _bootstrap()
+    if not manual_mode and not config.llm_api_key:
+        # Without a key every cycle would silently hold: refuse to start instead.
+        typer.echo("FEATHERLESS_API_KEY missing: set it in .env or run with --manual-mode")
+        raise typer.Exit(1)
     if execute:
         logger.warning("ARMED: paper order submission is enabled")
     # Seed fill tracking from orders already open at the broker, so a restart
@@ -670,36 +788,55 @@ def run(
         logger.warning("could not list open orders at startup: {}", error)
     if pending:
         logger.info("watching open orders for fills: {}", ", ".join(pending.values()))
-    while True:
-        record = run_cycle(
-            config,
-            trading,
-            stock_data,
-            option_data,
-            execute=execute,
-            manual_mode=manual_mode,
+    if with_dashboard and loop:
+        dashboard.serve(serve_port)
+        logger.info(
+            "dashboard: http://localhost:{}/paca-cycles/  http://localhost:{}/paca-candles/",
+            serve_port, serve_port,
         )
-        logger.info("cycle {} outcome: {}", record["cycle_id"], record.get("outcome"))
-        new = _new_orders(record)
-        pending.update(new)
-        if new:
-            # Short poll for instant fill feedback, timeboxed so an old
-            # straggler can never stall the loop.
-            deadline = time.monotonic() + FILL_POLL_TIMEOUT_SECONDS
-            while True:
-                _check_fills(trading, pending)
-                if not (new.keys() & pending.keys()) or time.monotonic() >= deadline:
-                    break
-                time.sleep(FILL_POLL_INTERVAL_SECONDS)
-        if not loop:
-            _check_fills(trading, pending)  # final status check before exit
-            if pending:
-                logger.info(
-                    "exiting with open orders; a later `run` resumes watching them"
-                )
-            break
-        time.sleep(interval)
-        _check_fills(trading, pending)  # catch slow fills from earlier cycles
+    flow_state: dict[str, deque] = {}  # tape readings per underlying, kept across cycles
+    try:
+        while True:
+            cycle_started = time.monotonic()
+            record = _safe_cycle(
+                config,
+                trading,
+                stock_data,
+                option_data,
+                execute=execute,
+                manual_mode=manual_mode,
+                flow_state=flow_state,
+            )
+            logger.info("cycle {} outcome: {}", record["cycle_id"], record.get("outcome"))
+            new = _new_orders(record)
+            pending.update(new)
+            if new:
+                # Short poll for instant fill feedback, timeboxed so an old
+                # straggler can never stall the loop.
+                deadline = time.monotonic() + FILL_POLL_TIMEOUT_SECONDS
+                while True:
+                    _check_fills(trading, pending)
+                    if not (new.keys() & pending.keys()) or time.monotonic() >= deadline:
+                        break
+                    time.sleep(FILL_POLL_INTERVAL_SECONDS)
+            if with_dashboard:
+                try:
+                    logger.info("dashboard export: {}", dashboard.export_all())
+                except Exception as error:  # noqa: BLE001 - never let the dashboard stop trading
+                    logger.warning("dashboard export skipped: {}", type(error).__name__)
+            if not loop:
+                _check_fills(trading, pending)  # final status check before exit
+                if pending:
+                    logger.info(
+                        "exiting with open orders; a later `run` resumes watching them"
+                    )
+                break
+            # Keep the cadence: sleep for what is left of the interval after the
+            # cycle + exports, so 5-minute bars are read once each.
+            time.sleep(max(0.0, interval - (time.monotonic() - cycle_started)))
+            _check_fills(trading, pending)  # catch slow fills from earlier cycles
+    except KeyboardInterrupt:
+        logger.warning("stopped by user; open orders (if any) keep working at the broker")
 
 
 @app.command()
@@ -814,15 +951,49 @@ def cancel(
     if not yes:
         typer.confirm(f"cancel {len(targets)} open order(s)?", abort=True)
     failed = False
-    # for oid, label in targets.items():
-    #     try:
-    #         broker.cancel_order(trading, oid)
-    #         typer.echo(f"cancel requested: {oid}  {label}")
-    #     except broker.BrokerError as error:
-    #         failed = True
-    #         typer.echo(f"FAIL {oid}  {label}: {error}")
+    for oid, label in targets.items():
+        try:
+            broker.cancel_order(trading, oid)
+            typer.echo(f"cancel requested: {oid}  {label}")
+        except broker.BrokerError as error:
+            failed = True
+            typer.echo(f"FAIL {oid}  {label}: {error}")
     if failed:
         raise typer.Exit(1)
+
+
+@app.command()
+def flow(
+    minutes: int = typer.Option(
+        settings.FLOW_LOOKBACK_MINUTES, help="Minutes of IEX prints behind the reading."
+    ),
+    at: str = typer.Option(
+        None, help="Read the window ending at this UTC time 'YYYY-MM-DD HH:MM' instead of now (after-hours checks)."
+    ),
+) -> None:
+    """Tape sensor read-out per whitelisted symbol (read-only): prints, buy/sell volume, flow, L1 skew."""
+    setup_logging()
+    config, trading, stock_data, _ = _bootstrap()
+    if at:
+        end = datetime.strptime(at, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+    else:
+        end = broker.fetch_clock(trading).server_time
+    trades = broker.fetch_recent_trades(stock_data, config.symbols, minutes, end)
+    quotes = broker.fetch_spot_quotes(stock_data, config.symbols)
+    typer.echo(
+        f"window: {minutes} min ending {end.isoformat(timespec='seconds')}  "
+        f"(min prints {settings.FLOW_MIN_TRADES}, entry gate |flow| >= {settings.FLOW_MIN_IMBALANCE})"
+    )
+    for symbol in config.symbols:
+        stats = tape.tick_rule(trades.get(symbol, []), settings.FLOW_MIN_TRADES)
+        quote = quotes.get(symbol)
+        l1 = tape.l1_imbalance(quote.bid_size, quote.ask_size) if quote is not None else None
+        flow_text = "unknown" if stats.imbalance is None else f"{stats.imbalance:+.2f}"
+        l1_text = "n/a" if l1 is None else f"{l1:+.2f}"
+        typer.echo(
+            f"  {symbol:<5} prints={stats.trades:<5} buy={stats.buy_volume:>9.0f} "
+            f"sell={stats.sell_volume:>9.0f} flow={flow_text:>8} l1={l1_text}"
+        )
 
 
 @app.command()

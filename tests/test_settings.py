@@ -70,6 +70,11 @@ def broken(mutate) -> dict:
         (lambda r: r["screener"].update(min_debit_frac=0.5, max_debit_frac=0.4), "screener.min_debit_frac"),  # > max
         (lambda r: r["signals"].update(trend_ema_fast=0), "signals.trend_ema_fast"),
         (lambda r: r["signals"].update(trend_ema_fast=50, trend_ema_slow=50), "signals.trend_ema_fast"),  # >= slow
+        (lambda r: r["signals"].update(flow_min_imbalance=1.5), "signals.flow_min_imbalance"),
+        (lambda r: r["signals"].update(flow_lookback_minutes=0), "signals.flow_lookback_minutes"),
+        (lambda r: r["signals"].update(flow_min_trades=-1), "signals.flow_min_trades"),
+        (lambda r: r["signals"].update(flow_exit_bars=0), "signals.flow_exit_bars"),
+        (lambda r: r["exits"].update(reversal_needs_flow=1), "exits.reversal_needs_flow"),  # must be a bool
     ],
 )
 def test_validate_rejects_and_names_the_key(mutate, expect_in_message):

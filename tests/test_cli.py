@@ -67,6 +67,11 @@ def spy_only_whitelist(monkeypatch):
     monkeypatch.setattr(settings, "RSI_OVERSOLD", -1.0)
     monkeypatch.setattr(settings, "MIN_DEBIT_FRAC", 0.01)
     monkeypatch.setattr(settings, "MAX_DEBIT_FRAC", 0.99)
+    # Tape sensor off by default here: these fakes carry no trade prints. The
+    # tape tests below switch it on explicitly.
+    monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.0)
+    monkeypatch.setattr(settings, "FLOW_MIN_TRADES", 0)
+    monkeypatch.setattr(settings, "REVERSAL_NEEDS_FLOW", False)
 
 
 def make_config():
@@ -748,3 +753,86 @@ def test_cancel_with_no_open_orders_is_a_noop(monkeypatch):
     result = CliRunner().invoke(cli.app, ["cancel"])
     assert result.exit_code == 0
     assert "no open orders" in result.output
+
+
+# --- continuous loop: a crashing cycle is journaled and never kills the process ---
+
+def test_safe_cycle_journals_error_and_returns_record(monkeypatch):
+    def explode(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "run_cycle", explode)
+    trading, stock, options = make_clients()
+    record = cli._safe_cycle(make_config(), trading, stock, options, execute=False, manual_mode=True)
+    assert record["outcome"] == "error"
+    assert record["error"] == "RuntimeError"
+    lines = cli.JOURNAL_PATH.read_text(encoding="utf-8").splitlines()
+    assert json.loads(lines[-1])["outcome"] == "error"
+
+
+def test_run_refuses_llm_mode_without_key(monkeypatch):
+    # No FEATHERLESS_API_KEY and no --manual-mode would mean a silent all-hold day.
+    trading, stock, options = make_clients()
+    monkeypatch.setattr(cli, "_bootstrap", lambda: (make_config(), trading, stock, options))
+    monkeypatch.setattr(cli, "setup_logging", lambda file_sink=False: None)  # no log file from tests
+    result = CliRunner().invoke(cli.app, ["run"])
+    assert result.exit_code == 1
+    assert "FEATHERLESS_API_KEY" in result.output
+
+
+# --- tape sensor inside the cycle ---
+
+def selling_prints(n=12):
+    return [(650.0 - 0.01 * i, 10, None) for i in range(n)]  # every print a downtick: sellers hitting bids
+
+
+def test_cycle_journals_flow_fields():
+    trading, _, options = make_clients()
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars()},
+        quotes_by_symbol={"SPY": (649.9, 650.1, 300, 100)},
+        trades_by_symbol={"SPY": [(650.0, 10, None), (650.1, 10, None), (650.2, 10, None)]},
+    )
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=False, manual_mode=True)
+    spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
+    assert spy["flow_imbalance"] == 1.0 and spy["flow_trades"] == 3
+    assert spy["l1_imbalance"] == pytest.approx(0.5)
+
+
+def test_reversal_exit_needs_flow_against_for_two_cycles(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "REVERSAL_NEEDS_FLOW", True)
+    monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.15)
+    monkeypatch.setattr(settings, "FLOW_EXIT_BARS", 2)
+    trading = FakeTradingClient(positions=held_call_spread())
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars(direction="down")},  # opposing event every cycle
+        quotes_by_symbol={"SPY": (649.9, 650.1)},
+        trades_by_symbol={"SPY": selling_prints()},  # tape against the call spread
+    )
+    flow_state = {}
+    first = cli.run_cycle(make_config(), trading, stock, FakeOptionDataClient(HOLD_ZONE_MARKS),
+                          execute=False, manual_mode=True, flow_state=flow_state)
+    assert first["exits"] == []  # one opposing reading is not conviction yet
+    assert first["flow_holds"] == ["SPY 2026-09-11 C: opposing event, tape streak 1/2"]
+    second = cli.run_cycle(make_config(), trading, stock, FakeOptionDataClient(HOLD_ZONE_MARKS),
+                           execute=False, manual_mode=True, flow_state=flow_state)
+    assert second["exits"][0]["reason"] == "reversal"
+    assert second["exits"][0]["flow_against"] is True
+
+
+def test_reversal_exit_falls_back_to_event_alone_when_flow_unknown(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "REVERSAL_NEEDS_FLOW", True)
+    monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.15)
+    monkeypatch.setattr(settings, "FLOW_MIN_TRADES", 50)
+    trading = FakeTradingClient(positions=held_call_spread())
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars(direction="down")},
+        quotes_by_symbol={"SPY": (649.9, 650.1)},
+    )  # no prints at all -> flow unknown -> the dev/paca event-only rule applies
+    record = cli.run_cycle(make_config(), trading, stock, FakeOptionDataClient(HOLD_ZONE_MARKS),
+                           execute=False, manual_mode=True, flow_state={})
+    assert record["exits"][0]["reason"] == "reversal"

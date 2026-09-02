@@ -494,6 +494,8 @@ function draw(symbol) {
   Plotly.newPlot(el, traces, layout, { responsive: true, displaylogo: false, scrollZoom: true,
     modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines"] });
 }
+// Live monitoring: data.json is rewritten by the loop; reload every 60 s unless #nolive.
+if (!location.hash.includes("nolive")) setTimeout(() => location.reload(), 60000);
 </script>
 </body>
 </html>

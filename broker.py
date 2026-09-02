@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from alpaca.data.enums import DataFeed, OptionsFeed
 from alpaca.data.historical import OptionHistoricalDataClient, StockHistoricalDataClient
-from alpaca.data.requests import OptionSnapshotRequest, StockLatestQuoteRequest
+from alpaca.data.requests import OptionSnapshotRequest, StockLatestQuoteRequest, StockTradesRequest
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import ContractType, OrderClass, OrderSide, PositionIntent, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import (
@@ -38,6 +38,7 @@ from data_models import (
     LegQuote,
     OrderPlan,
     OrderReceipt,
+    SpotQuote,
     SpreadFill,
 )
 
@@ -46,6 +47,7 @@ STOCK_FEED = DataFeed.IEX
 OPTION_FEED = OptionsFeed.INDICATIVE  # explicit: the SDK default varies by subscription
 SNAPSHOT_BATCH = 100
 CONTRACT_PAGE_LIMIT = 1000
+TRADES_LIMIT = 20_000  # prints per trades request; the busiest IEX names print ~1.2k per 15 min
 MAX_CONTRACT_PAGES = 5
 
 _LIVE_FLAG_VARS = ("ALPACA_LIVE", "ALPACA_LIVE_TRADING", "APCA_LIVE")
@@ -308,16 +310,55 @@ def cancel_order(trading: Any, order_id: str) -> None:
     guarded("order cancel", lambda: trading.cancel_order_by_id(order_id))
 
 
-def fetch_spot_mids(stock_data: Any, symbols: tuple[str, ...]) -> dict[str, float | None]:
+def fetch_spot_quotes(stock_data: Any, symbols: tuple[str, ...]) -> dict[str, SpotQuote]:
+    """Latest top-of-book quote per symbol (bid/ask + sizes); a missing symbol gets empty fields."""
     request = StockLatestQuoteRequest(symbol_or_symbols=list(symbols), feed=STOCK_FEED)
     raw = guarded("quotes read", lambda: stock_data.get_stock_latest_quote(request))
-    mids: dict[str, float | None] = {}
+    quotes: dict[str, SpotQuote] = {}
     for symbol in symbols:
         quote = raw.get(symbol)
-        bid = as_float(getattr(quote, "bid_price", None))
-        ask = as_float(getattr(quote, "ask_price", None))
-        mids[symbol] = (bid + ask) / 2 if bid and ask and 0 < bid <= ask else None
-    return mids
+        quotes[symbol] = SpotQuote(
+            bid=as_float(getattr(quote, "bid_price", None)),
+            ask=as_float(getattr(quote, "ask_price", None)),
+            bid_size=as_float(getattr(quote, "bid_size", None)),
+            ask_size=as_float(getattr(quote, "ask_size", None)),
+        )
+    return quotes
+
+
+def fetch_spot_mids(stock_data: Any, symbols: tuple[str, ...]) -> dict[str, float | None]:
+    return {symbol: quote.mid for symbol, quote in fetch_spot_quotes(stock_data, symbols).items()}
+
+
+def fetch_recent_trades(
+    stock_data: Any, symbols: tuple[str, ...], minutes: int, now: datetime
+) -> dict[str, list[tuple[float, float]]]:
+    """(price, size) prints per symbol over the last `minutes`, oldest first (IEX feed).
+
+    One multi-symbol request; the SDK follows pagination itself. A symbol with
+    no prints gets an empty list — the tape sensor then reads it as unknown.
+    """
+    request = StockTradesRequest(
+        symbol_or_symbols=list(symbols),
+        start=now - timedelta(minutes=minutes),
+        end=now,
+        feed=STOCK_FEED,
+        limit=TRADES_LIMIT,
+    )
+    raw = guarded("trades read", lambda: stock_data.get_stock_trades(request))
+    data = getattr(raw, "data", None)
+    if data is None:
+        data = raw if isinstance(raw, dict) else {}
+    trades: dict[str, list[tuple[float, float]]] = {}
+    for symbol in symbols:
+        pairs: list[tuple[float, float]] = []
+        for row in data.get(symbol) or []:
+            price = as_float(getattr(row, "price", None))
+            size = as_float(getattr(row, "size", None))
+            if price is not None and size is not None and price > 0 and size > 0:
+                pairs.append((price, size))
+        trades[symbol] = pairs
+    return trades
 
 
 def fetch_contracts(
