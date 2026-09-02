@@ -95,6 +95,22 @@ JOURNAL = [
 ]
 
 
+def test_build_spreads_joins_journal_rows_with_entries_list():
+    first = dict(JOURNAL[0])
+    first.pop("entry")
+    first["entries"] = [
+        {"symbol": "AAPL", "thesis": "wrong one", "spread": {"long": "AAPL260909C00300000", "short": "AAPL260909C00310000"}},
+        {"symbol": "NVDA", "thesis": "gap and go", "spread": {"long": LONG, "short": SHORT}},
+    ]
+    realized = [{
+        "underlying": "NVDA", "qty": 11, "long_symbol": LONG, "short_symbol": SHORT,
+        "entry_debit": 0.86, "exit_credit": 0.70, "pnl": -176.0, "pnl_pct": -0.186,
+        "entered_at": T_ENTER, "exited_at": T_EXIT, "exit_order": "sp-20260901-185000-exit-NVDA-260909C",
+    }]
+    row = export_candles.build_spreads(realized, [], [], [first, JOURNAL[1]])["NVDA"][0]
+    assert row["thesis"] == "gap and go" and row["cycle_id"] == "20260901-154703"
+
+
 def test_build_spreads_closed_row_joins_journal():
     realized = [{
         "underlying": "NVDA", "qty": 11, "long_symbol": LONG, "short_symbol": SHORT,

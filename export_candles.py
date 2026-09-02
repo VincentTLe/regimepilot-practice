@@ -28,7 +28,7 @@ import pos_and_risk
 import settings
 import signals
 from cli import JOURNAL_PATH, setup_logging
-from data_models import OpenSpread, SpreadFill
+from data_models import OpenSpread, SpreadFill, journal_entries
 
 EMA_FAST = 11  # display-only overlays; not used by signals.py
 EMA_SLOW = 22
@@ -136,19 +136,19 @@ def _exit_reasons(journal: list[dict]) -> dict[str, str]:
 
 
 def _journal_entry(journal: list[dict], long_symbol: str, short_symbol: str,
-                   entered_at: int | None) -> dict | None:
-    """Latest journaled entry for this leg pair that started at/before the fill."""
+                   entered_at: int | None) -> tuple[dict, dict] | None:
+    """Latest journaled (cycle, entry) for this leg pair that started at/before the fill."""
     best, best_t = None, None
     for rec in journal:
-        entry = rec.get("entry") or {}
-        spread = entry.get("spread") or {}
-        if spread.get("long") != long_symbol or spread.get("short") != short_symbol:
-            continue
         started = _epoch(rec.get("started_at")) if rec.get("started_at") else None
         if started is None or (entered_at is not None and started > entered_at + 60):
             continue
-        if best_t is None or started > best_t:
-            best, best_t = rec, started
+        for entry in journal_entries(rec):
+            spread = entry.get("spread") or {}
+            if spread.get("long") != long_symbol or spread.get("short") != short_symbol:
+                continue
+            if best_t is None or started > best_t:
+                best, best_t = (rec, entry), started
     return best
 
 
@@ -166,8 +166,8 @@ def _leg_info(long_symbol: str, short_symbol: str) -> dict:
 
 
 def _with_journal(row: dict, journal: list[dict]) -> dict:
-    rec = _journal_entry(journal, row["long_symbol"], row["short_symbol"], row["entered_at"])
-    entry = (rec or {}).get("entry") or {}
+    found = _journal_entry(journal, row["long_symbol"], row["short_symbol"], row["entered_at"])
+    rec, entry = found if found else ({}, {})
     cand = next((c for c in (rec or {}).get("candidates") or [] if c.get("symbol") == row["underlying"]), None)
     row["thesis"] = entry.get("thesis")
     row["events_at_entry"] = (cand or {}).get("events")

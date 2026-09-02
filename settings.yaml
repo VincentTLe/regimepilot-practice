@@ -44,7 +44,7 @@ screener:                    # which vertical spreads are even considered
 risk:                        # position sizing — all fractions of LIVE account equity
   per_entry_fraction: 0.005  # one entry's total debit <= this fraction (0.005 = $500 on $100k)
   per_underlying_fraction: 0.015   # open premium at risk on ONE underlying <= this fraction (0.02 = $2k on $100k)
-  per_cycle_fraction: 0.01   # new premium per cycle <= this fraction of equity
+  per_cycle_fraction: 0.01   # new premium per cycle <= this fraction of equity; also caps a cycle at floor(per_cycle / per_entry) entries (0.01/0.005 = 2)
   total_fraction: 0.10       # total open premium at risk <= this fraction of equity
   allow_stacking: true       # allow a further SAME-direction entry on an underlying already held (sized by per_underlying_fraction); false = one spread per underlying
 

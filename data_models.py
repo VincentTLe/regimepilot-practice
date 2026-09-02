@@ -173,6 +173,15 @@ class SpreadFill:
     net_price: float  # per share: +buy legs −sell legs → entry = +debit, exit = −credit
 
 
+def journal_entries(record: dict) -> list[dict]:
+    """Entry attempts of one journal row. Rows written before 2026-09-02 carry a
+    single `entry` (dict or None); newer rows carry an `entries` list."""
+    if record.get("entries") is not None:
+        return list(record["entries"])
+    entry = record.get("entry")
+    return [entry] if entry else []
+
+
 def to_json_line(obj: object) -> str:
     """One JSON line for the cycle journal. Dataclasses and datetimes are handled."""
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):

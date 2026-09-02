@@ -148,6 +148,19 @@ def test_manual_garbage_or_blank_input_is_a_pass(answer):
     assert choice is None  # no order ever results from garbage input
 
 
+@pytest.mark.parametrize("answers", [[], ["1"]])  # EOF at the number prompt, or at the direction prompt
+def test_manual_end_of_input_is_a_pass(answers):
+    queue = iter(answers)
+
+    def piped(prompt):
+        try:
+            return next(queue)
+        except StopIteration:
+            raise EOFError
+
+    assert decision_layer.manual_decide([candidate()], input_fn=piped, echo=lambda s: None) is None
+
+
 def test_manual_never_prompts_without_candidates():
     assert decision_layer.manual_decide([], input_fn=refuse_input, echo=silent) is None
     assert decision_layer.manual_decide(

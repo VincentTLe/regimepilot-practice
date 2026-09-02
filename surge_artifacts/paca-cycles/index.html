@@ -502,11 +502,11 @@ function normalize(raw) {
       warnings: [],
       exits: [],
       candidates: [],
-      entry: dec.new_entry ? {
+      entries: dec.new_entry ? [{
         symbol: dec.symbol, direction: dec.new_entry.direction,
         thesis: dec.new_entry.thesis, model: dec.model,
         screen_rejections: null, spread: null, qty: null, rejected: null
-      } : null,
+      }] : [],
       outcome: raw.outcome || "—",
       error: raw.error || null,
     };
@@ -524,7 +524,7 @@ function normalize(raw) {
     warnings: raw.warnings || [],
     exits: raw.exits || [],
     candidates: raw.candidates || [],
-    entry: raw.entry || null,
+    entries: raw.entries || (raw.entry ? [raw.entry] : []),  // rows before 2026-09-02 carry one `entry`
     outcome: raw.outcome || "—",
     error: raw.error || null,
   };
@@ -589,7 +589,7 @@ function render() {
   $("lastCycleTime").textContent = latest.started ? "last cycle " + etFull.format(latest.started) + " ET" : "";
 
   // KPIs
-  const entryAttempts = cycles.filter(c => c.entry).length;
+  const entryAttempts = cycles.reduce((n, c) => n + c.entries.length, 0);
   const exitCount = cycles.reduce((n, c) => n + c.exits.length, 0);
   const days = groupByDay(cycles);
   $("kpis").innerHTML = `
@@ -622,9 +622,8 @@ function render() {
     const bits = [];
     if (c.exits.length) bits.push(esc(exitSummary(c)));
     if (c.outcome === "market_closed") bits.push("market closed — no action");
-    else if (c.entry) {
-      const e = c.entry;
-      bits.push(`<b>${esc(e.symbol)}</b> ${e.direction === "CALL" ? "call" : e.direction === "PUT" ? "put" : ""} spread` +
+    else if (c.entries.length) {
+      for (const e of c.entries) bits.push(`<b>${esc(e.symbol)}</b> ${e.direction === "CALL" ? "call" : e.direction === "PUT" ? "put" : ""} spread` +
         (e.rejected ? ` — <span style="color:var(--critical)">${esc(e.rejected)}</span>` : " — submitted"));
     } else if (!c.exits.length) bits.push("no entry candidate");
     return `<button class="cycle-row ${i === selected ? "sel" : ""}" data-idx="${i}">
@@ -639,7 +638,7 @@ function render() {
   };
   $("cycleList").innerHTML = days.map((d, di) => {
     const dayCycles = d.idxs.map(i => cycles[i]);
-    const entries = dayCycles.filter(c => c.entry).length;
+    const entries = dayCycles.reduce((n, c) => n + c.entries.length, 0);
     const exits = dayCycles.reduce((n, c) => n + c.exits.length, 0);
     const warns = dayCycles.reduce((n, c) => n + c.warnings.length, 0);
     const counts = [`${d.idxs.length} cycles`, entries ? `${entries} entr${entries === 1 ? "y" : "ies"}` : "",
@@ -773,9 +772,8 @@ function renderDetail() {
         <tbody>${rows}</tbody></table></div></div>`);
   }
 
-  // entry
-  if (c.entry) {
-    const e = c.entry;
+  // entries: one block per attempt (a cycle may take several)
+  c.entries.forEach((e, n) => {
     const rej = e.screen_rejections || {};
     const rejEntries = Object.entries(rej).sort((a, b) => b[1] - a[1]);
     const maxRej = Math.max(...rejEntries.map(x => x[1]), 1);
@@ -788,7 +786,8 @@ function renderDetail() {
         <dt>qty</dt><dd>${e.qty ?? "—"}</dd>
         <dt>skew</dt><dd>${fmt(e.spread.skew, 4)}</dd>
       </dl>` : '<div class="empty">No spread survived the screen.</div>';
-    parts.push(`<div><div class="section-title">Entry attempt</div>
+    const title = c.entries.length > 1 ? `Entry attempt ${n + 1} of ${c.entries.length}` : "Entry attempt";
+    parts.push(`<div><div class="section-title">${title}</div>
       <div class="entry-grid">
         <div class="entry-card">
           <div class="headline"><span class="sym mono">${esc(e.symbol)}</span> ${dirHtml(e.direction)}
@@ -809,7 +808,8 @@ function renderDetail() {
             : '<div class="empty">No screen data recorded.</div>'}
         </div>
       </div></div>`);
-  } else if (c.outcome !== "market_closed") {
+  });
+  if (!c.entries.length && c.outcome !== "market_closed") {
     parts.push(`<div><div class="section-title">Entry attempt</div><div class="empty">No entry candidate this cycle.</div></div>`);
   }
 

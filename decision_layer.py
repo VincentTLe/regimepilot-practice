@@ -1,4 +1,6 @@
-"""Decision layer: the LLM (or the human, in manual mode) picks at most one entry.
+"""Decision layer: the LLM (or the human, in manual mode) picks at most one entry
+per call. The cycle may call again with the remaining candidates once an entry
+is placed, until the per-cycle premium cap is used up.
 
 The decider only ever chooses a symbol from the scored candidate list and a
 direction. Strikes, expiration, quantity and price are deterministic code.
@@ -33,7 +35,8 @@ negative = below). Weigh trend alignment - entering against both anchors needs
 a strong reason. A candidate whose "held" field is set already has an open
 spread in that direction: entering it is an ADD to that position, and your
 direction must match it (code rejects any other direction). Choose at most
-ONE candidate to enter, or pass.
+ONE candidate from this list to enter, or pass. Once an entry is placed you may
+be asked again in the same cycle with the remaining candidates.
 
 Reply with strict JSON only:
 {"action": "enter" | "pass", "symbol": "<one of the candidate symbols>",
@@ -125,7 +128,7 @@ def decide_entry(
     api_key: str,
     transport: httpx.BaseTransport | None = None,
 ) -> EntryChoice | None:
-    """Ask the LLM to pick at most one entry from the gate-passing candidates."""
+    """Ask the LLM to pick at most one entry from the gate-passing candidates (one call = one pick)."""
     tradeable = [c for c in candidates if c.gate_block is None]
     if not tradeable:
         return None
@@ -161,8 +164,10 @@ def manual_decide(
     """Manual mode: the human picks which candidate to trade, or passes.
 
     Anything unparseable — blank, not a number, out of range — is a pass:
-    no order ever results from garbage input. The direction defaults to the
-    selected candidate's first event; only an explicit CALL/PUT overrides it.
+    no order ever results from garbage input. End of input (EOF) is a pass too:
+    the cycle can ask a second time after an entry, and piped answers such as
+    "1\nCALL\n" run out there. The direction defaults to the selected
+    candidate's first event; only an explicit CALL/PUT overrides it.
     """
     if input_fn is None:
         input_fn = input  # resolved at call time so tests can patch builtins.input
@@ -181,12 +186,15 @@ def manual_decide(
             f"ema_fast_dist={c.ema_fast_dist} ema_slow_dist={c.ema_slow_dist}"
             + (f" held={c.held} (add)" if c.held else "")
         )
-    raw = input_fn("Select a candidate number to trade (blank to pass): ").strip()
-    if not raw.isdigit() or not (1 <= int(raw) <= len(tradeable)):
+    try:
+        raw = input_fn("Select a candidate number to trade (blank to pass): ").strip()
+        if not raw.isdigit() or not (1 <= int(raw) <= len(tradeable)):
+            return None
+        chosen = tradeable[int(raw) - 1]
+        default_direction = chosen.events[0].direction
+        raw_direction = input_fn(f"Direction CALL or PUT [default {default_direction}]: ").strip().upper()
+    except EOFError:
         return None
-    chosen = tradeable[int(raw) - 1]
-    default_direction = chosen.events[0].direction
-    raw_direction = input_fn(f"Direction CALL or PUT [default {default_direction}]: ").strip().upper()
     direction = raw_direction if raw_direction in ("CALL", "PUT") else default_direction
     event_kinds = ", ".join(e.kind for e in chosen.events)
     return EntryChoice(

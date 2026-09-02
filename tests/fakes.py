@@ -150,7 +150,9 @@ class FakeTradingClient:
         return self.orders
 
     def get_option_contracts(self, request):
-        return SimpleNamespace(option_contracts=self.contracts, next_page_token=None)
+        root = getattr(request, "root_symbol", None)  # the real API scopes by underlying
+        contracts = [c for c in self.contracts if not root or str(c.symbol).startswith(root)]
+        return SimpleNamespace(option_contracts=contracts, next_page_token=None)
 
     def submit_order(self, request):
         if self.submit_error is not None:

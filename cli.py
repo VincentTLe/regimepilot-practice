@@ -9,6 +9,7 @@ Run as: uv run --env-file .env cli.py <command>
 
 from __future__ import annotations
 
+import math
 import sys
 import time
 from dataclasses import asdict, replace
@@ -33,6 +34,7 @@ from data_models import (
     OrderPlan,
     SpreadQuote,
     SymbolFeatures,
+    journal_entries,
     to_json_line,
 )
 
@@ -283,16 +285,28 @@ def run_cycle(
     logger.info("candidates passing gates: {}", [c.symbol for c in tradeable] or "none")
 
     # --- Decision + screener + risk + execution ---
-    record["entry"] = None
-    choice = (
-        _decide(tradeable, config, manual_mode, llm_transport) if tradeable else None
+    # One decision at a time; ask again with the remaining candidates until the
+    # cycle has placed floor(per_cycle / per_entry) entries (2 with the shipped
+    # settings), the decider passes, or candidates run out. Rejected attempts
+    # (no spread, risk caps, recheck) consume their symbol but not a slot.
+    max_entries = max(
+        1, math.floor(settings.PER_CYCLE_FRACTION / settings.PER_ENTRY_FRACTION)
     )
-    if choice is not None:
+    entries: list[dict] = []
+    record["entries"] = entries
+    cycle_spent = 0.0  # premium committed by earlier entries in this cycle
+    planned = 0
+    remaining = list(tradeable)
+    while remaining and planned < max_entries:
+        choice = _decide(remaining, config, manual_mode, llm_transport)
+        if choice is None:
+            break
+        remaining = [c for c in remaining if c.symbol != choice.symbol]
         held = held_by_underlying.get(choice.symbol, [])
         if held and choice.direction != pos_and_risk.held_direction(held):
             # Deterministic guard: an add must follow the held spread's direction,
             # whatever the decider (LLM or human) replied.
-            record["entry"] = {
+            entry = {
                 "symbol": choice.symbol,
                 "direction": choice.direction,
                 "thesis": choice.thesis,
@@ -303,7 +317,7 @@ def run_cycle(
                 "entry refused: {} {} opposes the held spread", choice.symbol, choice.direction
             )
         else:
-            record["entry"] = _attempt_entry(
+            entry = _attempt_entry(
                 choice,
                 features[choice.symbol].mid,
                 config,
@@ -315,18 +329,24 @@ def run_cycle(
                 account.open_order_symbols,
                 cycle_id,
                 execute,
+                cycle_spent=cycle_spent,
                 exclude_symbols=frozenset(
                     leg for s in held for leg in (s.long_symbol, s.short_symbol)
                 ),
             )
+        entries.append(entry)
+        receipt = entry.get("receipt") or {}
+        if receipt.get("submitted") or receipt.get("dry_run"):
+            cycle_spent += entry["premium"]
+            planned += 1
 
-    submitted = [e for e in exits if e.get("receipt", {}).get("submitted")] or (
-        record["entry"] or {}
-    ).get("receipt", {}).get("submitted")
+    submitted = any(
+        (e.get("receipt") or {}).get("submitted") for e in exits + entries
+    )
     record["outcome"] = (
         "submitted"
         if submitted
-        else ("planned" if not execute and (exits or record["entry"]) else "hold")
+        else ("planned" if not execute and (exits or entries) else "hold")
     )
     append_journal(record)
     return record
@@ -432,6 +452,8 @@ def _attempt_entry(
     pending_symbols: frozenset[str],
     cycle_id: str,
     execute: bool,
+    *,
+    cycle_spent: float,
     exclude_symbols: frozenset[str] = frozenset(),
 ) -> dict:
     entry: dict = {
@@ -480,7 +502,7 @@ def _attempt_entry(
         "skew": round(spread.skew, 4),
     }
     qty, reason = pos_and_risk.size_entry(
-        spread.net_debit, equity, open_risk, underlying_risk, cycle_spent=0.0
+        spread.net_debit, equity, open_risk, underlying_risk, cycle_spent=cycle_spent
     )
     if reason is not None:
         entry["rejected"] = reason
@@ -526,7 +548,7 @@ def _attempt_entry(
         entry["rejected"] = "recheck: debit_out_of_band"
         return entry
     qty, reason = pos_and_risk.size_entry(
-        fresh_debit, fresh_account.equity, open_risk, underlying_risk, cycle_spent=0.0
+        fresh_debit, fresh_account.equity, open_risk, underlying_risk, cycle_spent=cycle_spent
     )
     if reason is not None:
         entry["rejected"] = f"recheck: {reason}"
@@ -545,6 +567,7 @@ def _attempt_entry(
         net_debit=fresh_debit,
         skew=spread.skew,
     )
+    entry["premium"] = round(fresh_debit * qty * 100.0, 2)  # dollars this entry commits
     plan = options_screener.build_entry_plan(fresh_spread, qty, cycle_id)
     entry["receipt"] = _settle(trading, plan, execute)
     return entry
@@ -597,10 +620,10 @@ def _new_orders(record: dict) -> dict[str, str]:
         receipt = exit_entry.get("receipt") or {}
         if receipt.get("submitted") and receipt.get("order_id"):
             orders[receipt["order_id"]] = f"exit {exit_entry.get('spread')}"
-    entry = record.get("entry") or {}
-    receipt = entry.get("receipt") or {}
-    if receipt.get("submitted") and receipt.get("order_id"):
-        orders[receipt["order_id"]] = f"entry {entry.get('symbol')}"
+    for entry in journal_entries(record):
+        receipt = entry.get("receipt") or {}
+        if receipt.get("submitted") and receipt.get("order_id"):
+            orders[receipt["order_id"]] = f"entry {entry.get('symbol')}"
     return orders
 
 

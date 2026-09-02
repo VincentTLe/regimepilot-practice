@@ -23,6 +23,13 @@ def parse_ts(raw: str) -> datetime:
     return datetime.fromisoformat(raw.replace(" ", "T").replace("Z", "+00:00"))
 
 
+def entries_of(record: dict) -> list[dict]:
+    """Entry attempts of one row: `entries` list (since 2026-09-02) or the older single `entry`."""
+    if record.get("entries") is not None:
+        return list(record["entries"])
+    return [record["entry"]] if record.get("entry") else []
+
+
 def fmt(value, digits=2, width=0):
     text = "-" if value is None else f"{value:.{digits}f}"
     return text.rjust(width) if width else text
@@ -84,7 +91,7 @@ def main() -> None:
             print(f"  {sym:5s} {kind:18s} {n}")
 
     # --- entries ---
-    entries = [(r, r["entry"]) for r in records if r.get("entry")]
+    entries = [(r, e) for r in records for e in entries_of(r)]
     print(f"\nentry attempts: {len(entries)}")
     rejections_by_symbol: dict[str, Counter] = defaultdict(Counter)
     for r, e in entries:

@@ -40,15 +40,18 @@ Evaluate every gate-passing candidate with fired events. For each, reason explic
 - **Volatility context**: ATR relative to price — enough range to pay for a debit spread, not so wild that the spread quotes will be junk.
 - **History**: what the journal says about this underlying's recent screen rejections and holdings.
 
-Pick **at most one** candidate and direction (CALL = expect rise, PUT = expect fall), or pass. Write the reasoning out in your reply before executing — that is the point of this skill.
+Pick **at most one** candidate and direction (CALL = expect rise, PUT = expect fall) per prompt, or pass. After an entry is placed the run asks again with the **remaining** candidates (re-numbered from 1), up to `per_cycle_fraction / per_entry_fraction` entries per cycle (2 with the shipped settings). Taking a second entry is the exception, not the norm — it needs its own momentum thesis, not a correlated echo of the first (SPY then QQQ is one bet twice). Write the reasoning out in your reply before executing — that is the point of this skill.
 
 ## Step 3 — Run the cycle
 
 Manual mode lists tradeable candidates (gate PASS **and** at least one event) **sorted alphabetically by symbol**, numbered from 1, then asks for a number and a direction. Derive your index from that ordering.
 
 ```bash
-# entering candidate N with an explicit direction:
+# entering candidate N with an explicit direction (end of input = pass on the second prompt):
 printf "N\nCALL\n" | uv run --env-file .env cli.py run --manual-mode --execute 2>&1
+
+# entering two: N from the first list, then M from the re-numbered list WITHOUT the first symbol:
+printf "N\nCALL\nM\nPUT\n" | uv run --env-file .env cli.py run --manual-mode --execute 2>&1
 
 # passing (no entry; exits and journaling still run):
 printf "\n" | uv run --env-file .env cli.py run --manual-mode --execute 2>&1

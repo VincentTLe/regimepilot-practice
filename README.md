@@ -3,7 +3,8 @@
 Options vertical spreads, paper only. An autonomous paper-trading agent for the
 [**Alpaca AI Trading Agents Hackathon**](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon)
 (Aug 28 – Sep 4, 2026, submissions due Sep 4 15:00 UTC). Every cycle it scores a **whitelist of candidate
-underlyings**, lets an LLM pick at most one entry, and trades **debit vertical
+underlyings**, lets an LLM pick entries one at a time (up to `per_cycle_fraction /
+per_entry_fraction` per cycle — 2 with the shipped settings), and trades **debit vertical
 spreads** as single multi-leg (MLEG) limit orders. Exits are purely mechanical.
 
 > [!TIP]
@@ -47,7 +48,7 @@ Each box in the diagram is one module:
 |---|---|---|
 | Entry signal (market data) | `market_data.py` | OHLCV DataFrame for one symbol at a time, any bar timeframe |
 | Entry signal (analysis) | `signals.py` | RSI/ATR/MACD + event detection (gap, breakout, MACD cross) + entry gates (pure) |
-| Entry signal (decision) | `decision_layer.py` | LLM (OpenRouter) — or you, with `--manual-mode` — picks ≤1 entry from the event-firing candidates |
+| Entry signal (decision) | `decision_layer.py` | LLM (OpenRouter) — or you, with `--manual-mode` — picks one entry at a time from the event-firing candidates; asked again with the rest until the per-cycle cap (2 entries) is used |
 | Option screener | `options_screener.py` | expiry pick, spread enumeration, liquidity filter, reward-to-risk ranking, order plans (pure) |
 | Risk manager + Position manager | `pos_and_risk.py` | leg pairing, mechanical exits, equity-relative sizing (pure) |
 | Execution + Account state | `broker.py` | all env/Alpaca access; `submit_paper_order` is the only submitting function |
