@@ -245,6 +245,7 @@ def run_cycle(
     record["candidates"] = [
         {
             "symbol": c.symbol,
+            "mid": c.mid,  # journaled so the post-close review can grade decisions against later prices
             "events": [e.kind for e in c.events],
             "rsi": c.rsi,
             "atr": c.atr,

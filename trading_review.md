@@ -1,4 +1,11 @@
-# Trading review — first live day (2026-09-01)
+# Trading reviews
+
+Living post-close review log for PACA, newest first. Each section is one trading
+day's review — session evidence, prior watch-item scorecard, decision grades,
+findings, and what to watch next — produced by the `/trading-review` skill
+(`.claude/skills/trading-review/`).
+
+## Review — 2026-09-01 (first live day)
 
 Written 2026-09-02 by Claude acting as the system's momentum-trader decision
 layer, after running 32 live cycles on 2026-09-01 (13:28–16:01 ET) via
@@ -6,7 +13,7 @@ layer, after running 32 live cycles on 2026-09-01 (13:28–16:01 ET) via
 the code as of commit `423a785`, and the closed-trade P&L. The changes this
 review recommended were approved and landed in commit `cbe1cff`.
 
-## Verdict
+### Verdict
 
 The architecture is right: deterministic screening, sizing, and exits with a
 discretionary decision layer on top, an append-only journal, and risk caps that
@@ -15,7 +22,7 @@ pre-order recheck vetoed a QQQ put whose quotes had widened; the trade would
 have lost). The losses came from three specific, fixable places — signal noise,
 spread structure, and a mis-sized screener floor — not from the design.
 
-## What the day's data showed
+### What the day's data showed
 
 - **45 entry attempts → 6 orders.** 36 died as `no_spread`, 3 at the pre-order
   recheck, 1 at risk caps. The screener, not the signal, was the bottleneck.
@@ -33,9 +40,9 @@ spread structure, and a mis-sized screener floor — not from the design.
   mathematically favors deep OTM: it chose a TSLA 380/390 call spread on a
   $356 stock — debit 11% of width, roughly a 0.15-delta bet.
 
-## Findings and what was done (commit `cbe1cff`)
+### Findings and what was done (commit `cbe1cff`)
 
-### 1. MACD zero-cross had no magnitude threshold — the dominant loss source
+#### 1. MACD zero-cross had no magnitude threshold — the dominant loss source
 
 A momentum event should represent impulse. The 2-ATR gap/breakout events do;
 a bare histogram sign flip does not. **Fix:** `macd_cross_*` now fires only
@@ -75,7 +82,7 @@ Every trade the human decider took passes the threshold; every cross it passed
 on as noise — including the one that whipsawed the SPY puts out at a loss — is
 now blocked mechanically.
 
-### 2. RSI was computed but never used — exhaustion filtering lived in prompt text
+#### 2. RSI was computed but never used — exhaustion filtering lived in prompt text
 
 Every RSI judgment ("don't chase a gap at RSI 75") depended on the decision
 layer remembering to make it. **Fix:** a deterministic entry gate
@@ -83,7 +90,7 @@ layer remembering to make it. **Fix:** a deterministic entry gate
 events at RSI ≤ `rsi_oversold` (30). Entries only — the exit path still sees
 raw events, so a capitulation gap at RSI 25 still closes a held call spread.
 
-### 3. Reward-to-risk ranking bought deep-OTM lottery spreads
+#### 3. Reward-to-risk ranking bought deep-OTM lottery spreads
 
 A momentum spread trader buys the long leg near ATM (delta ~0.4–0.55), paying
 25–45% of the width, so the position responds to the move being traded.
@@ -91,17 +98,17 @@ A momentum spread trader buys the long leg near ATM (delta ~0.4–0.55), paying
 (shipped 0.25–0.45), enforced both in the screener and again at the pre-order
 recheck. Ranking stays max reward-to-risk *within* that band.
 
-### 4. Width floor mis-sized for index ETFs
+#### 4. Width floor mis-sized for index ETFs
 
 `min_width_pct` 0.02 → 0.01. With the debit band in place, narrower spreads
 remain economically sane, and SPY/QQQ can actually form candidates.
 
-### 5. Small bug: flat-price bars scored RSI 100
+#### 5. Small bug: flat-price bars scored RSI 100
 
 `loss == 0` forced RSI to 100 even when `gain == 0` too. A flat run is neutral:
 now 50. (Mattered for thin symbols on the IEX feed.)
 
-## Deliberately unchanged
+### Deliberately unchanged
 
 - **`bar_timeframe: 5m`** — 15m bars would give better signals but near-zero
   trades in the hackathon's remaining two days. Revisit after Sep 4.
@@ -113,7 +120,7 @@ now 50. (Mattered for thin symbols on the IEX feed.)
 - **Liquidity filters** (OI ≥ 100, quote age ≤ 10 s, leg spread ≤ 350 bps) —
   they rejected a lot, but on the IEX feed they were doing genuine safety work.
 
-## Deferred recommendations (tracked in TODO.md)
+### Deferred recommendations (tracked in TODO.md)
 
 1. **Regular-hours session filter** — indicators are computed over extended-hours
    IEX bars. Thin overnight bars shrink ATR (the event denominator), and the
@@ -127,7 +134,7 @@ now 50. (Mattered for thin symbols on the IEX feed.)
 4. **Exit-mark quote sanity** — stop/take-profit marks bypass `check_leg`, so a
    stale or absurdly wide option quote can trigger them.
 
-## How to judge the changes
+### Watch next session
 
 Watch the next live day's journal for: the mix of `rejected` reasons (if
 `debit_out_of_band` dominates, loosen `min_debit_frac` toward 0.20); whether

@@ -221,6 +221,20 @@ this README after you pick. Example:
 /whitelist-candidates COIN CVX TLT
 ```
 
+### Reviewing the day with `/trading-review`
+
+A third skill (`.claude/skills/trading-review/`) runs the after-close review that produced
+[trading_review.md](trading_review.md). It digests the day's cycle journal
+(`analyze.py`, read-only), pulls realized/open PnL from `pnl.py`, scores the previous
+review's "Watch next session" items, grades every entry and pass against what prices did
+afterwards, prepends a dated review section to `trading_review.md`, and finishes with
+prioritized recommendations — applying only the ones you pick, and committing nothing.
+Run it after the close:
+
+```
+/trading-review
+```
+
 ### Dry-run checklist: verify everything works end-to-end
 
 Run these in order, during US market hours, with your paper keys in `.env`.
