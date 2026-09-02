@@ -113,7 +113,9 @@ the full review, evidence and rationale are in
   coverage even if removed from the whitelist.
 - **Orders**: one MLEG limit order per action (entry at the fresh net debit,
   exit at the fresh net credit — negative limit per Alpaca's convention),
-  time-in-force day, deterministic `client_order_id` per cycle.
+  time-in-force day, deterministic `client_order_id` per cycle and spread
+  (exit ids carry both strikes so two spreads on one underlying/expiry can
+  close in the same cycle).
 
 ## Safety rules this code enforces
 

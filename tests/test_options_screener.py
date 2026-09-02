@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -266,7 +267,7 @@ def test_select_spread_ranks_across_expiries():
 def open_spread():
     return OpenSpread(
         underlying="SPY", expiration=EXP, option_type="C",
-        long_symbol="LSYM", short_symbol="SSYM", qty=2, net_entry_debit=2.0,
+        long_symbol="SPY260911C00450000", short_symbol="SPY260911C00455000", qty=2, net_entry_debit=2.0,
     )
 
 
@@ -289,7 +290,22 @@ def test_exit_plan_credit_is_negative_net_price():
     assert plan.limit_price == round(3.2 - 6.0, 2) == -2.8  # credit -> negative
     assert plan.legs[0].intent == "sell_to_close" and plan.legs[1].intent == "buy_to_close"
     assert plan.qty == 2
-    assert plan.client_order_id == "sp-20260831-150000-exit-SPY-260911C"
+    assert plan.client_order_id == "sp-20260831-150000-exit-SPY-260911C450000-455000"
+
+
+def test_exit_plan_ids_differ_for_two_spreads_same_expiry_and_type():
+    # 2026-09-01 18:50: two AMZN 2026-09-11 call spreads exited in one cycle and shared an id,
+    # so Alpaca refused the second order. The strikes must make the ids distinct.
+    exp = date(2026, 9, 11)
+    a = OpenSpread(underlying="AMZN", expiration=exp, option_type="C",
+                   long_symbol="AMZN260911C00260000", short_symbol="AMZN260911C00267500", qty=5, net_entry_debit=1.82)
+    b = OpenSpread(underlying="AMZN", expiration=exp, option_type="C",
+                   long_symbol="AMZN260911C00262500", short_symbol="AMZN260911C00270000", qty=7, net_entry_debit=1.30)
+    ids = {screener.build_exit_plan(s, leg(bid=1.0, ask=1.1), leg(bid=0.5, ask=0.6), "20260901-185000").client_order_id
+           for s in (a, b)}
+    assert ids == {"sp-20260901-185000-exit-AMZN-260911C260000-267500", "sp-20260901-185000-exit-AMZN-260911C262500-270000"}
+    # Alpaca caps the id at 128 chars and documents no character set: stay alphanumeric + hyphen.
+    assert all(len(i) <= 128 and re.fullmatch(r"[A-Za-z0-9-]+", i) for i in ids)
 
 
 def test_exit_plan_refuses_missing_quotes():

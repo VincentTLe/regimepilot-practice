@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import pos_and_risk
 import settings
 from data_models import LegPlan, LegQuote, OpenSpread, OrderPlan, SpreadQuote
 
@@ -218,6 +219,16 @@ def build_entry_plan(spread: SpreadQuote, qty: int, cycle_id: str) -> OrderPlan:
     )
 
 
+def _strike_tag(symbol: str) -> str:
+    """Strike in OCC thousandths from an OCC symbol ("...C00262500" -> "262500").
+
+    Digits only on purpose: Alpaca documents a 128-char cap on client_order_id but
+    not an allowed character set, so we stay within [A-Za-z0-9-]. Unparseable
+    symbols fall back to the raw symbol so the id still differs per spread.
+    """
+    return symbol[-8:].lstrip("0") or "0" if pos_and_risk.parse_occ(symbol) else symbol
+
+
 def build_exit_plan(
     spread: OpenSpread,
     long_quote: LegQuote,
@@ -228,11 +239,18 @@ def build_exit_plan(
 
     Per the SDK convention the net limit is negative when the close collects a
     credit (the normal case) and positive when closing costs money.
+
+    The client_order_id is unique per (cycle, spread): it carries both strikes,
+    because two spreads on the same underlying/expiry/type can exit in one cycle
+    and Alpaca refuses a duplicate id (seen 2026-09-01 with two AMZN call spreads).
     """
     if long_quote.bid is None or short_quote.ask is None:
         return None
     limit = round(short_quote.ask - long_quote.bid, 2)
-    tag = f"{spread.expiration:%y%m%d}{spread.option_type}"
+    tag = (
+        f"{spread.expiration:%y%m%d}{spread.option_type}"
+        f"{_strike_tag(spread.long_symbol)}-{_strike_tag(spread.short_symbol)}"
+    )
     return OrderPlan(
         kind="exit",
         underlying=spread.underlying,
