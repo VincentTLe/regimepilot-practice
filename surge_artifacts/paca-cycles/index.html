@@ -423,6 +423,15 @@ const pnlHtml = (v, text) => v == null || v === 0 ? esc(text)
   : `<span class="${v > 0 ? "pnl-pos" : "pnl-neg"}">${esc(text)}</span>`;
 const dteFrom = (expStr) => { const exp = parseTs(expStr); return exp ? Math.ceil((exp.getTime() - Date.now()) / 86400000) : null; };
 const fmtHold = (min) => min == null ? "—" : min < 60 ? `${Math.round(min)}m` : `${Math.floor(min / 60)}h ${Math.round(min % 60)}m`;
+// OCC option symbol: the last 8 digits are the strike ×1000 (NVDA260909C00227500 → 227.5).
+const occStrike = (sym) => { const m = /(\d{8})$/.exec(sym || ""); return m ? parseInt(m[1], 10) / 1000 : null; };
+const fmtStrike = (v) => String(+v.toFixed(2));
+// Width <td> for a vertical spread, with the strikes in the hover tooltip.
+function widthCell(longSym, shortSym) {
+  const a = occStrike(longSym), b = occStrike(shortSym);
+  if (a == null || b == null) return '<td class="num">—</td>';
+  return `<td class="num"><span data-tip="strikes ${fmtStrike(a)} / ${fmtStrike(b)}">$${fmt(Math.abs(a - b), 2)}</span></td>`;
+}
 
 function parseTs(s) {
   if (!s) return null;
@@ -835,6 +844,7 @@ function renderRealized(rows) {
       <td><span class="sym" data-tip="${esc(r.long_symbol)} / ${esc(r.short_symbol)}">${esc(r.underlying ?? "?")}</span></td>
       <td>${dirHtml(r.type === "C" ? "CALL" : r.type === "P" ? "PUT" : r.type ?? "—")}</td>
       <td class="num">${esc(r.expiration ?? "—")}</td>
+      ${widthCell(r.long_symbol, r.short_symbol)}
       <td class="num">${r.qty}${r.unmatched_qty > 0 ? ` <span class="warn-flag" data-tip="no matching entry fill in the lookback window">⚠ ${r.unmatched_qty} unmatched</span>` : ""}</td>
       <td class="num">${r.entry_debit == null ? "—" : "$" + fmt(r.entry_debit, 2)}</td>
       <td class="num">${r.exit_credit == null ? "—" : "$" + fmt(r.exit_credit, 2)}</td>
@@ -857,7 +867,7 @@ function renderRealized(rows) {
       <div class="panel-head"><span>Closed spreads</span><span>${sorted.length}</span></div>
       <div class="detail-body">
         ${sorted.length ? `<div class="tbl-scroll"><table>
-          <thead><tr><th>Underlying</th><th>Type</th><th>Expiration</th><th>Qty</th>
+          <thead><tr><th>Underlying</th><th>Type</th><th>Expiration</th><th>Width</th><th>Qty</th>
             <th>Entry debit/sh</th><th>Exit credit/sh</th><th>PnL</th><th>PnL %</th>
             <th>Entered (ET)</th><th>Exited (ET)</th><th>Hold</th></tr></thead>
           <tbody>${body}</tbody></table></div>`
@@ -915,6 +925,7 @@ function renderPositions(snap, pnlRows) {
       <td><span class="sym">${esc(s.underlying)}</span></td>
       <td>${dirHtml(s.option_type === "C" ? "CALL" : s.option_type === "P" ? "PUT" : s.option_type)}</td>
       <td class="num">${esc(s.expiration)}${dte == null ? "" : ` <span style="color:var(--muted)">(${dte}d)</span>`}</td>
+      ${widthCell(s.long_symbol, s.short_symbol)}
       <td class="num">${s.qty}</td>
       <td><span class="chip mono">${esc(s.long_symbol)}</span></td>
       <td><span class="chip mono">${esc(s.short_symbol)}</span></td>
@@ -944,7 +955,7 @@ function renderPositions(snap, pnlRows) {
       <div class="panel-head"><span>Open spreads</span><span>${spreads.length}</span></div>
       <div class="detail-body">
         ${spreads.length ? `<div class="tbl-scroll"><table>
-          <thead><tr><th>Underlying</th><th>Type</th><th>Expiration</th><th>Qty</th>
+          <thead><tr><th>Underlying</th><th>Type</th><th>Expiration</th><th>Width</th><th>Qty</th>
             <th>Long leg</th><th>Short leg</th><th>Entry debit/sh</th><th>Mark/sh</th>
             <th>Unrealized</th><th>PnL %</th><th>Max risk</th></tr></thead>
           <tbody>${rows}</tbody></table></div>`
