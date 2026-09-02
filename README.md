@@ -62,21 +62,27 @@ typo'd key, a wrong type, or an out-of-range value stops the program naming the
 exact key (e.g. `settings.yaml: exits.stop_fraction: must be in (0, 1), got 5`).
 `.env` holds only credentials and the paper flag — secrets and strategy never mix.
 
-## Methodology (approved 2026-08-31)
+## Methodology (approved 2026-08-31, revised 2026-09-02)
 
 All numbers below are the shipped `settings.yaml` defaults — change them there.
+After the first live trading day the signal and spread-selection rules were
+revised (MACD magnitude threshold, RSI exhaustion gate, debit-fraction band) —
+the full review, evidence and rationale are in
+[trading_review.md](trading_review.md).
 
 - **Whitelist** (`symbols` in settings.yaml): SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN,
   IBIT, MSTR, SLV, WMT, GLD, USO, XLE by default (index/tech core plus bitcoin, metals,
   energy and staples for diversification).
-- **Signals**: OHLCV bars at the configured `bar_timeframe` (default 15m, one
+- **Signals**: OHLCV bars at the configured `bar_timeframe` (default 5m, one
   fetch per symbol) drive RSI(14), ATR(14) and MACD(12/26/9). A symbol is a
   candidate only when at least one **event** fired on the latest completed bar:
   gap (|open − prior close| > 2×ATR), breakout (|close − open| > 2×ATR), or the
-  MACD histogram crossing zero — ATR taken as of the prior bar. Entry gates:
-  market open, bars fresher than 2× bar duration, enough history for the
-  indicators, quote present, event fired. Trading near the open and the close
-  is allowed. A held or pending underlying is not a candidate.
+  MACD histogram crossing zero with |histogram| ≥ 0.05×ATR (sub-threshold flips
+  are chop, not momentum) — ATR taken as of the prior bar. Entry gates: market
+  open, bars fresher than 2× bar duration, enough history for the indicators,
+  quote present, event fired, and the **RSI exhaustion gate** (entries only):
+  CALL events are dropped at RSI ≥ 70, PUT events at RSI ≤ 30. Trading near the
+  open and the close is allowed. A held or pending underlying is not a candidate.
 - **Decision**: the LLM sees the event-firing candidates (events + RSI/ATR/MACD
   readings) and returns `{action, symbol, direction, thesis}`. Malformed output
   means no entry. Deterministic code picks everything else.
@@ -84,15 +90,17 @@ All numbers below are the shipped `settings.yaml` defaults — change them there
   **≥5 DTE** that have at least 3 strikes within 5% of spot with OI ≥ 100
   (skips the empty daily expiries ETFs like GLD list), ranked as one pool;
   strikes within ±10% of spot, OTM only plus the one ATM strike bracketing
-  spot; pair widths between **2% and 5% of spot**; per-leg filter: open
+  spot; pair widths between **1% and 5% of spot**; per-leg filter: open
   interest ≥ 100, fresh two-sided quote (within 10 s of the server clock),
-  leg spread ≤ 500 bps, implied volatility present; sanity
-  `0.05 ≤ net debit < width`; rank by **reward-to-risk**
+  leg spread ≤ 350 bps, implied volatility present; sanity
+  `0.05 ≤ net debit < width`; the debit must sit in **25%–45% of the width**
+  (long leg near ATM — no deep-OTM lottery tickets, no overpriced spreads;
+  see [trading_review.md](trading_review.md)); rank by **reward-to-risk**
   `(width − debit) / debit`, highest first (ties → tighter combined leg
   quotes). Full methodology and the alternatives considered:
   [SPREAD_SELECTION.md](SPREAD_SELECTION.md).
-- **Risk (from live equity, every cycle)**: per entry ≤ 1% of equity, open
-  premium per underlying ≤ 2%, new premium per cycle ≤ 1%, total open premium
+- **Risk (from live equity, every cycle)**: per entry ≤ 0.5% of equity, open
+  premium per underlying ≤ 1.5%, new premium per cycle ≤ 1%, total open premium
   at risk ≤ 10%. Unknown equity or unknown open risk refuses entries.
 - **Exits (mechanical only, before entries, every cycle)**: close the spread
   when net mark ≤ −50% of entry debit, ≥ +100%, DTE ≤ 2, or — the **reversal
