@@ -8,6 +8,15 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+  // Theme: a saved choice wins; otherwise follow the OS. Runs before paint to avoid a flash.
+  (function () {
+    let saved = null;
+    try { saved = localStorage.getItem("paca-theme"); } catch (e) {}
+    const system = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = saved === "dark" || saved === "light" ? saved : system;
+  })();
+</script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 img { max-width: 100%; }
@@ -34,8 +43,8 @@ img { max-width: 100%; }
   --critical:    #d03b3b;
   --chip:        #f0efec;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+/* Dark palette. data-theme is set by the head script (saved choice, else OS preference). */
+:root[data-theme="dark"] {
     color-scheme: dark;
     --page:        #0d0d0d;
     --surface:     #1a1a19;
@@ -52,7 +61,6 @@ img { max-width: 100%; }
     --div-mid:     #383835;
     --good-text:   #0ca30c;
     --chip:        #2c2c2a;
-  }
 }
 
 body {
@@ -73,6 +81,10 @@ header h1 {
   font-size: 20px; font-weight: 600; letter-spacing: -0.02em;
 }
 header h1 .tail { color: var(--muted); font-weight: 400; }
+header h1 .home { color: inherit; text-decoration: none; }
+header h1 .home:hover, header h1 .home:focus-visible { text-decoration: underline; text-underline-offset: 4px; outline: none; }
+.sub .ext { color: var(--accent); text-decoration: none; }
+.sub .ext:hover, .sub .ext:focus-visible { text-decoration: underline; }
 .badges { display: flex; gap: 8px; margin-left: auto; }
 .badge {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
@@ -81,6 +93,18 @@ header h1 .tail { color: var(--muted); font-weight: 400; }
   display: inline-flex; align-items: center; gap: 6px; background: var(--surface);
 }
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+.theme-toggle {
+  font: inherit; cursor: pointer; color: var(--ink-2);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.theme-toggle:hover { color: var(--ink); border-color: var(--ink-2); }
+.theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-toggle .when-dark { display: none; }
+:root[data-theme="dark"] .theme-toggle .when-light { display: none; }
+:root[data-theme="dark"] .theme-toggle .when-dark { display: inline; }
 .sub { color: var(--ink-2); margin-bottom: 20px; }
 .sub .mono { font-size: 13px; }
 
@@ -126,8 +150,25 @@ header h1 .tail { color: var(--muted); font-weight: 400; }
 .kpi .value { font-size: 26px; font-weight: 650; letter-spacing: -0.01em; }
 .kpi .note { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
 
-/* ---------- outcome strip ---------- */
+/* ---------- outcome strip (one row per trading day, newest first) ---------- */
 .strip-block { margin-bottom: 20px; }
+.strip { display: grid; gap: 6px; }
+.strip-day { display: grid; grid-template-columns: 120px 1fr; align-items: start; gap: 10px; }
+.strip-day-label {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px; color: var(--ink-2); padding-top: 1px; white-space: nowrap;
+}
+.strip-day-label small { color: var(--muted); margin-left: 6px; font-size: 10.5px; }
+.strip-cells { display: flex; gap: 3px; flex-wrap: wrap; }
+.strip .cell { position: relative; }
+.strip .cell.cell-exit::after {
+  content: ""; position: absolute; left: 4px; top: 4px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ink);
+}
+.strip-legend .legend-exit { background: var(--baseline); position: relative; }
+.strip-legend .legend-exit::after {
+  content: ""; position: absolute; left: 3px; top: 3px; width: 4px; height: 4px; border-radius: 50%; background: var(--ink);
+}
 .strip-label {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
@@ -149,7 +190,7 @@ header h1 .tail { color: var(--muted); font-weight: 400; }
 
 /* ---------- layout ---------- */
 .cols { display: grid; grid-template-columns: 360px 1fr; gap: 16px; align-items: start; }
-@media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .cols { grid-template-columns: 1fr; } .strip-day { grid-template-columns: 1fr; gap: 4px; } }
 
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .panel-head {
@@ -159,8 +200,23 @@ header h1 .tail { color: var(--muted); font-weight: 400; }
   display: flex; justify-content: space-between; align-items: center; gap: 8px;
 }
 
-/* ---------- cycle list ---------- */
+/* ---------- cycle list (grouped by trading day) ---------- */
 .cycle-list { max-height: 640px; overflow-y: auto; }
+.day-head {
+  position: sticky; top: 0; z-index: 1; background: var(--surface);
+  padding: 7px 14px; border-bottom: 1px solid var(--grid); cursor: pointer; list-style: none;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+}
+.day-head::-webkit-details-marker { display: none; }
+.day-head::before { content: "▸"; margin-right: 8px; color: var(--muted); }
+details.day[open] > .day-head::before { content: "▾"; }
+.day-head .date { color: var(--ink); font-weight: 600; flex: 1; }
+.day-head .counts { font-size: 10.5px; letter-spacing: 0.04em; text-transform: none; }
+.day-head:hover { background: color-mix(in oklab, var(--accent) 6%, var(--surface)); }
+.day-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+details.day:last-child .cycle-row:last-child { border-bottom: none; }
 .cycle-row {
   width: 100%; text-align: left; background: none; border: none; color: inherit; font: inherit;
   display: block; padding: 10px 14px; border-bottom: 1px solid var(--grid); cursor: pointer;
@@ -184,6 +240,11 @@ header h1 .tail { color: var(--muted); font-weight: 400; }
 .pill.outcome-submitted { background: var(--good); color: #fff; }
 .pill.outcome-planned  { background: color-mix(in oklab, var(--good) 16%, transparent); color: var(--good-text); }
 .pill.outcome-entered  { background: color-mix(in oklab, var(--good) 16%, transparent); color: var(--good-text); }
+.pill.exit-take_profit { background: color-mix(in oklab, var(--good) 16%, transparent); color: var(--good-text); }
+.pill.exit-stop        { background: color-mix(in oklab, var(--critical) 16%, transparent); color: var(--critical); }
+.pill.exit-reversal    { background: color-mix(in oklab, var(--warning) 22%, transparent); color: var(--ink); }
+.pill.exit-expiry      { background: var(--chip); color: var(--ink-2); }
+.pill.exit-other       { background: var(--chip); color: var(--ink-2); }
 .pill.outcome-hold     { background: var(--chip); color: var(--ink-2); }
 .pill.outcome-market_closed { background: var(--chip); color: var(--muted); }
 .pill.outcome-error    { background: color-mix(in oklab, var(--critical) 16%, transparent); color: var(--critical); }
@@ -283,17 +344,21 @@ footer code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 
 <body>
 <div class="wrap">
   <header>
-    <h1>PACA <span class="tail">/ cycle monitor</span></h1>
+    <h1><a class="home" href="./" title="Back to the latest cycle">PACA</a> <span class="tail">/ cycle monitor</span></h1>
     <div class="badges" id="badges"></div>
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle light or dark theme">
+      <span class="when-light">☾ Dark</span><span class="when-dark">☀ Light</span>
+    </button>
   </header>
-  <p class="sub">Position-aware Agentic Capital Allocator · paper-trading cycle log · <span class="mono" id="lastCycleTime">—</span></p>
+  <p class="sub">Position-aware Agentic Capital Allocator · paper-trading cycle log · <span class="mono" id="lastCycleTime">—</span>
+    · <a class="ext" href="https://github.com/maria2469/Alpaca-Ai-Hackathon" target="_blank" rel="noopener">source on GitHub ↗</a></p>
 
   <div id="err"></div>
   <div id="app" hidden>
     <nav class="tabs" role="tablist">
       <button class="tab sel" data-tab="cycles">Cycles</button>
       <button class="tab" data-tab="positions">Positions</button>
-      <button class="tab" data-tab="realized">Realized</button>
+      <button class="tab" data-tab="realized">Realized (PnL)</button>
       <button class="tab" data-tab="config">Config</button>
     </nav>
 
@@ -301,7 +366,7 @@ footer code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 
     <div class="kpis" id="kpis"></div>
 
     <div class="strip-block">
-      <div class="strip-label">Outcome history (oldest → newest, click to inspect)</div>
+      <div class="strip-label">Outcome history by trading day (newest day first · cells run oldest → newest · click to inspect)</div>
       <div class="strip" id="strip"></div>
       <div class="strip-legend">
         <span><i style="background:var(--good);box-shadow:0 0 0 2px var(--good-text)"></i>submitted — order sent</span>
@@ -309,6 +374,7 @@ footer code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 
         <span><i style="background:var(--baseline)"></i>hold</span>
         <span><i style="background:var(--grid)"></i>market closed</span>
         <span><i style="background:var(--critical)"></i>error</span>
+        <span><i class="legend-exit"></i>dot — an exit was decided this cycle</span>
       </div>
     </div>
 
@@ -366,6 +432,46 @@ function parseTs(s) {
 const etTime = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false });
 const etDate = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", month:"short", day:"numeric" });
 const etFull = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false });
+// Trading-day grouping is done in US/Eastern: a 20:00 ET cycle must not fall into the next UTC day.
+const etDayKey = new Intl.DateTimeFormat("en-CA", { timeZone:"America/New_York", year:"numeric", month:"2-digit", day:"2-digit" });  // "2026-09-01"
+const etDayLabel = new Intl.DateTimeFormat("en-US", { timeZone:"America/New_York", weekday:"short", month:"short", day:"numeric" });  // "Mon, Sep 1"
+const dayKey = (c) => c.started ? etDayKey.format(c.started) : "unknown";
+// [{key, label, idxs}] newest day first; idxs index the newest-first `cycles` array (the data-idx contract).
+function groupByDay(list) {
+  const groups = new Map();
+  list.forEach((c, i) => {
+    const key = dayKey(c);
+    if (!groups.has(key)) groups.set(key, { key, label: c.started ? etDayLabel.format(c.started) : "unknown date", idxs: [] });
+    groups.get(key).idxs.push(i);
+  });
+  return [...groups.values()];
+}
+
+/* ---------- exits ---------- */
+const EXIT_REASON_LABEL = { expiry: "≤2 DTE expiry", reversal: "reversal", stop: "stop −50%", take_profit: "take-profit +100%" };
+const exitReasonClass = (r) => r in EXIT_REASON_LABEL ? "exit-" + r : "exit-other";
+// "AAPL 2026-09-11 C" -> {underlying, expiration, type}
+function parseSpreadLabel(s) {
+  const m = /^(\S+)\s+(\d{4}-\d{2}-\d{2})\s+([CP])/.exec(String(s || ""));
+  return m ? { underlying: m[1], expiration: m[2], type: m[3] } : { underlying: String(s || "?"), expiration: "", type: "" };
+}
+function exitStatus(x) {  // {kind: ok|failed|planned|skipped, text}
+  const r = x.receipt;
+  if (x.skipped) return { kind: "skipped", text: x.skipped === "pending_order" ? "skipped — an order is already pending on these legs" : x.skipped === "no_quote" ? "skipped — no usable quote" : "skipped — " + x.skipped };
+  if (!r) return { kind: "skipped", text: "no order record" };
+  if (r.submitted) return { kind: "ok", text: "exit order submitted" + (r.status ? " · " + r.status : "") };
+  if (r.dry_run) return { kind: "planned", text: "planned (dry run)" + (r.plan?.limit_price != null ? ` — limit $${fmt(Math.abs(r.plan.limit_price), 2)} credit` : "") };
+  return { kind: "failed", text: "submit failed — " + (r.error || "unknown error") };
+}
+function exitSummary(c) {  // short text for list rows and strip tooltips
+  if (!c.exits.length) return "";
+  const names = c.exits.map(x => parseSpreadLabel(x.spread).underlying);
+  const reasons = [...new Set(c.exits.map(x => x.reason).filter(Boolean))].join("/");
+  const failed = c.exits.filter(x => exitStatus(x).kind === "failed").length;
+  const skipped = c.exits.filter(x => exitStatus(x).kind === "skipped").length;
+  const head = c.exits.length === 1 ? `exit ${names[0]}` : `${c.exits.length} exits: ${names.join(", ")}`;
+  return head + (reasons ? ` (${reasons})` : "") + (failed ? ` · ${failed} failed` : "") + (skipped ? ` · ${skipped} skipped` : "");
+}
 
 /* ---------- schema normalization ----------
    Slim schema (current): flat fields.
@@ -451,6 +557,7 @@ function bindTips(root) {
 /* ---------- rendering ---------- */
 let cycles = [];      // newest first
 let selected = 0;
+let realizedByOrder = new Map();  // exit client_order_id -> realized.json row, filled after boot
 
 function render() {
   const latest = cycles[0];
@@ -468,44 +575,64 @@ function render() {
 
   // KPIs
   const entryAttempts = cycles.filter(c => c.entry).length;
+  const exitCount = cycles.reduce((n, c) => n + c.exits.length, 0);
+  const days = groupByDay(cycles);
   $("kpis").innerHTML = `
     <div class="kpi"><div class="label">Equity</div><div class="value">${fmtUsd(latest.equity)}</div><div class="note">paper account</div></div>
     <div class="kpi"><div class="label">Open spreads</div><div class="value">${latest.open_spreads.length}</div><div class="note">open risk ${fmtUsd(latest.open_risk)}</div></div>
     <div class="kpi"><div class="label">Last outcome</div><div class="value" style="font-size:18px;padding-top:5px"><span class="pill ${outcomeClass(latest.outcome)}">${esc(latest.outcome)}</span></div><div class="note">${latest.started ? etTime.format(latest.started) + " ET" : ""}</div></div>
-    <div class="kpi"><div class="label">Cycles logged</div><div class="value">${cycles.length}</div><div class="note">${entryAttempts} entry attempts</div></div>
+    <div class="kpi"><div class="label">Cycles logged</div><div class="value">${cycles.length}</div><div class="note">${days.length} day${days.length === 1 ? "" : "s"} · ${entryAttempts} entries · ${exitCount} exits</div></div>
     <div class="kpi"><div class="label">Options level</div><div class="value">${latest.options_level ?? "—"}</div><div class="note">account approval</div></div>`;
 
-  // outcome strip (oldest -> newest)
-  $("strip").innerHTML = cycles.slice().reverse().map((c, i) => {
-    const idx = cycles.length - 1 - i;
-    return `<button class="cell ${idx === selected ? "sel" : ""} ${c.outcome === "submitted" ? "cell-submitted" : ""}" data-idx="${idx}"
+  // outcome strip: one row per trading day (newest first), cells oldest -> newest within the day
+  const cellHtml = (idx) => {
+    const c = cycles[idx];
+    const ex = exitSummary(c);
+    return `<button class="cell ${idx === selected ? "sel" : ""} ${c.outcome === "submitted" ? "cell-submitted" : ""} ${c.exits.length ? "cell-exit" : ""}" data-idx="${idx}"
       style="background:${OUTCOME_COLOR[c.outcome] || "var(--baseline)"}"
-      data-tip="${esc(c.cycle_id)} · ${esc(c.outcome)}"
-      aria-label="cycle ${esc(c.cycle_id)}, outcome ${esc(c.outcome)}"></button>`;
-  }).join("");
+      data-tip="${c.started ? etTime.format(c.started) + " ET" : esc(c.cycle_id)} · ${esc(c.outcome)}${ex ? " · " + esc(ex) : ""}"
+      aria-label="cycle ${esc(c.cycle_id)}, outcome ${esc(c.outcome)}${ex ? ", " + esc(ex) : ""}"></button>`;
+  };
+  $("strip").innerHTML = days.map(d => `<div class="strip-day">
+      <div class="strip-day-label">${esc(d.label)}<small>${d.idxs.length}</small></div>
+      <div class="strip-cells">${d.idxs.slice().reverse().map(cellHtml).join("")}</div>
+    </div>`).join("");
   $("strip").querySelectorAll(".cell").forEach(b =>
     b.addEventListener("click", () => select(+b.dataset.idx)));
 
-  // cycle list
-  $("cycleCount").textContent = cycles.length + " total";
-  $("cycleList").innerHTML = cycles.map((c, i) => {
-    let summary;
-    if (c.outcome === "market_closed") summary = "market closed — no action";
+  // cycle list: collapsible day groups, latest day open
+  $("cycleCount").textContent = `${cycles.length} cycles · ${days.length} day${days.length === 1 ? "" : "s"}`;
+  const rowHtml = (i) => {
+    const c = cycles[i];
+    const bits = [];
+    if (c.exits.length) bits.push(esc(exitSummary(c)));
+    if (c.outcome === "market_closed") bits.push("market closed — no action");
     else if (c.entry) {
       const e = c.entry;
-      summary = `<b>${esc(e.symbol)}</b> ${e.direction === "CALL" ? "call" : e.direction === "PUT" ? "put" : ""} spread` +
-        (e.rejected ? ` — <span style="color:var(--critical)">${esc(e.rejected)}</span>` : " — submitted");
-    } else summary = "no entry candidate";
+      bits.push(`<b>${esc(e.symbol)}</b> ${e.direction === "CALL" ? "call" : e.direction === "PUT" ? "put" : ""} spread` +
+        (e.rejected ? ` — <span style="color:var(--critical)">${esc(e.rejected)}</span>` : " — submitted"));
+    } else if (!c.exits.length) bits.push("no entry candidate");
     return `<button class="cycle-row ${i === selected ? "sel" : ""}" data-idx="${i}">
       <span class="top">
         <span class="time">${c.started ? etTime.format(c.started) : "—"}</span>
-        <span class="date">${c.started ? etDate.format(c.started) : ""}</span>
         <span class="pill ${outcomeClass(c.outcome)}">${esc(c.outcome)}</span>
         ${c.warnings.length ? `<span class="warn-flag" data-tip="${esc(c.warnings.join("; "))}">⚠ ${c.warnings.length}</span>` : ""}
         ${c.legacy ? '<span class="chip">legacy</span>' : ""}
       </span>
-      <span class="summary">${summary}</span>
+      <span class="summary">${bits.join(" · ")}</span>
     </button>`;
+  };
+  $("cycleList").innerHTML = days.map((d, di) => {
+    const dayCycles = d.idxs.map(i => cycles[i]);
+    const entries = dayCycles.filter(c => c.entry).length;
+    const exits = dayCycles.reduce((n, c) => n + c.exits.length, 0);
+    const warns = dayCycles.reduce((n, c) => n + c.warnings.length, 0);
+    const counts = [`${d.idxs.length} cycles`, entries ? `${entries} entr${entries === 1 ? "y" : "ies"}` : "",
+      exits ? `${exits} exit${exits === 1 ? "" : "s"}` : "", warns ? `⚠ ${warns}` : ""].filter(Boolean).join(" · ");
+    return `<details class="day" data-day="${esc(d.key)}"${di === 0 || d.idxs.includes(selected) ? " open" : ""}>
+      <summary class="day-head"><span class="date">${esc(d.label)}</span><span class="counts">${counts}</span></summary>
+      ${d.idxs.map(rowHtml).join("")}
+    </details>`;
   }).join("");
   $("cycleList").querySelectorAll(".cycle-row").forEach(b =>
     b.addEventListener("click", () => select(+b.dataset.idx)));
@@ -518,6 +645,14 @@ function select(i) {
   selected = i;
   $("strip").querySelectorAll(".cell").forEach(b => b.classList.toggle("sel", +b.dataset.idx === i));
   $("cycleList").querySelectorAll(".cycle-row").forEach(b => b.classList.toggle("sel", +b.dataset.idx === i));
+  // Make sure the selected row is visible: expand its day and scroll it into view.
+  const row = $("cycleList").querySelector(`.cycle-row[data-idx="${i}"]`);
+  if (row) {
+    const day = row.closest("details");
+    if (day && !day.open) day.open = true;
+    row.scrollIntoView({ block: "nearest" });
+  }
+  if (cycles[i]?.cycle_id) history.replaceState(null, "", "#cycle=" + encodeURIComponent(cycles[i].cycle_id));
   renderDetail();
   bindTips($("detail"));
 }
@@ -542,8 +677,40 @@ function renderDetail() {
   }
 
   if (c.exits.length) {
-    parts.push(`<div><div class="section-title">Exits</div><div class="warn-list">${
-      c.exits.map(x => `<div class="chip">${esc(typeof x === "string" ? x : JSON.stringify(x))}</div>`).join(" ")}</div></div>`);
+    const cards = c.exits.map(x => {
+      if (typeof x === "string") return `<div class="entry-card"><div class="chip mono">${esc(x)}</div></div>`;
+      const sp = parseSpreadLabel(x.spread);
+      const st = exitStatus(x);
+      const coid = x.receipt?.client_order_id;
+      // Only a submitted exit can have a fill. (Two spreads on the same underlying/expiry/type
+      // share a client_order_id, so a failed duplicate must not borrow its sibling's fill.)
+      const fill = coid && st.kind === "ok" ? realizedByOrder.get(coid) : null;
+      const statusHtml =
+        st.kind === "ok" ? `<div class="ok-line">✓ ${esc(st.text)}</div>` :
+        st.kind === "failed" ? `<div class="reject-line">✕ ${esc(st.text)}</div>` :
+        st.kind === "planned" ? `<div class="empty">${esc(st.text)}</div>` :
+        `<div class="warn-item" style="display:inline-block">${esc(st.text)}</div>`;
+      const fillRows = fill ? `
+          <dt>filled credit</dt><dd>$${fmt(fill.exit_credit, 2)}/sh</dd>
+          <dt>entry debit</dt><dd>${fill.entry_debit == null ? "—" : "$" + fmt(fill.entry_debit, 2) + "/sh"}</dd>
+          <dt>qty</dt><dd>${fill.qty}${fill.unmatched_qty ? ` <span class="warn-flag">(${fill.unmatched_qty} unmatched)</span>` : ""}</dd>
+          <dt>realized PnL</dt><dd>${pnlHtml(fill.pnl, fmtSigned(fill.pnl))}${fill.pnl_pct == null ? "" : ` <span style="color:var(--muted)">(${fmtPct(fill.pnl_pct)})</span>`}</dd>
+          <dt>hold</dt><dd>${fmtHold(fill.hold_min)}</dd>`
+        : (st.kind === "ok" ? `<dt>fill</dt><dd class="empty">not in realized.json yet (30-day window, or still working)</dd>` : "");
+      return `<div class="entry-card">
+        <div class="headline"><span class="sym mono">${esc(sp.underlying)}</span>
+          ${sp.type ? dirHtml(sp.type === "C" ? "CALL" : "PUT") : ""}
+          ${sp.expiration ? `<span class="chip mono">${esc(sp.expiration)}</span>` : ""}
+          <span class="pill ${exitReasonClass(x.reason)}">${esc(EXIT_REASON_LABEL[x.reason] || x.reason || "exit")}</span></div>
+        ${statusHtml}
+        <dl class="kv">
+          <dt>mark at decision</dt><dd>${x.net_mark == null ? "—" : "$" + fmt(x.net_mark, 2) + "/sh"}</dd>
+          ${fillRows}
+          ${coid ? `<dt>order</dt><dd><span class="chip mono">${esc(coid)}</span></dd>` : ""}
+        </dl>
+      </div>`;
+    }).join("");
+    parts.push(`<div><div class="section-title">Exits · ${c.exits.length}</div><div class="entry-grid">${cards}</div></div>`);
   }
 
   if (c.legacy) {
@@ -691,6 +858,20 @@ function renderRealized(rows) {
       </div>
     </div>`;
 }
+
+/* ---------- theme toggle ---------- */
+// Click flips the theme and saves it; the saved choice wins over the OS setting on later visits.
+// Until a choice is saved, follow live OS changes.
+$("themeToggle").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("paca-theme", next); } catch (e) { /* storage blocked: theme still flips for this visit */ }
+});
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+  let saved = null;
+  try { saved = localStorage.getItem("paca-theme"); } catch (err) {}
+  if (saved !== "dark" && saved !== "light") document.documentElement.dataset.theme = e.matches ? "dark" : "light";
+});
 
 /* ---------- tabs ---------- */
 document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => {
@@ -850,9 +1031,13 @@ fetch("cycles.jsonl", { cache: "no-store" })
     if (!parsed.length) throw new Error("no parsable cycles in cycles.jsonl");
     parsed.sort((a, b) => (b.started?.getTime() ?? 0) - (a.started?.getTime() ?? 0));
     cycles = parsed;
-    selected = 0;
+    // Deep link: #cycle=<cycle_id> preselects a cycle; otherwise the newest.
+    const wanted = decodeURIComponent((location.hash.match(/^#cycle=(.+)$/) || [])[1] || "");
+    const found = wanted ? cycles.findIndex(c => c.cycle_id === wanted) : -1;
+    selected = found >= 0 ? found : 0;
     $("app").hidden = false;
     render();
+    if (found >= 0) $("cycleList").querySelector(`.cycle-row[data-idx="${found}"]`)?.scrollIntoView({ block: "nearest" });
   })
   .catch(err => {
     const el = $("err");
@@ -873,6 +1058,11 @@ Promise.all([
   renderConfig(cfg, acct?.equity ?? null);
   bindTips($("tab-positions"));
   bindTips($("tab-realized"));
+  // Exit cards in the cycle detail join realized fills by client_order_id; refresh the detail now that we have them.
+  if (Array.isArray(realized)) {
+    realizedByOrder = new Map(realized.filter(r => r.exit_order).map(r => [r.exit_order, r]));
+    if (cycles.length) { renderDetail(); bindTips($("detail")); }
+  }
 });
 </script>
 </body>
