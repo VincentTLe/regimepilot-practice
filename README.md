@@ -146,6 +146,9 @@ uv run --env-file .env cli.py account                          # account state (
 uv run --env-file .env cli.py candidates                       # scored whitelist (read-only)
 uv run --env-file .env cli.py screen SPY --direction CALL      # what spread would be picked
 
+uv run --env-file .env pnl.py positions [--json]               # open PnL per spread (Alpaca's marks)
+uv run --env-file .env pnl.py realized [--json] [--days 30]    # PnL per closed spread, from filled orders
+
 uv run --env-file .env cli.py run --manual-mode                # one cycle, dry run, you pick the entry
 uv run --env-file .env cli.py run --manual-mode --execute      # one cycle, real PAPER order
 uv run --env-file .env cli.py run --execute --loop             # autonomous, LLM, every 15 min

@@ -12,7 +12,7 @@ details and credentials can never leak into logs or tracebacks.
 from __future__ import annotations
 
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from alpaca.data.enums import DataFeed, OptionsFeed
@@ -26,10 +26,20 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
     OptionLegRequest,
 )
+from loguru import logger
 
 import pos_and_risk
 import settings
-from data_models import AccountState, Clock, Config, LegPosition, LegQuote, OrderPlan, OrderReceipt
+from data_models import (
+    AccountState,
+    Clock,
+    Config,
+    LegPosition,
+    LegQuote,
+    OrderPlan,
+    OrderReceipt,
+    SpreadFill,
+)
 
 # Plumbing constants — not trader knobs, so not in settings.yaml.
 STOCK_FEED = DataFeed.IEX
@@ -178,6 +188,8 @@ def fetch_account_state(trading: Any, whitelist: tuple[str, ...]) -> AccountStat
                 strike=strike,
                 qty=signed_qty,
                 avg_entry_price=as_float(getattr(position, "avg_entry_price", None)),
+                unrealized_pl=as_float(getattr(position, "unrealized_pl", None)),
+                current_price=as_float(getattr(position, "current_price", None)),
             )
         )
 
@@ -217,6 +229,74 @@ def fetch_open_orders(trading: Any) -> dict[str, str]:
         label = "/".join(symbols) or str(getattr(order, "client_order_id", None) or "unknown")
         orders[str(order_id)] = label
     return orders
+
+
+def _enum_value(raw: Any) -> str:
+    return str(getattr(raw, "value", raw) or "").lower()
+
+
+def fetch_spread_fills(trading: Any, after: datetime | None) -> list[SpreadFill]:
+    """Filled two-leg MLEG orders this agent submitted (client_order_id `sp-...`).
+
+    Read-only, for PnL reporting. Net price is rebuilt from the legs (+buy, −sell)
+    rather than trusting the parent's filled_avg_price. Anything not shaped like
+    one of our spreads is skipped with a warning, never guessed at.
+    """
+    request = GetOrdersRequest(
+        status=QueryOrderStatus.CLOSED, limit=500, nested=True, after=after
+    )
+    raw_orders = guarded("closed orders read", lambda: trading.get_orders(request))
+    fills: list[SpreadFill] = []
+    for order in raw_orders:
+        client_order_id = str(getattr(order, "client_order_id", None) or "")
+        if not client_order_id.startswith("sp-"):
+            continue
+        if _enum_value(getattr(order, "order_class", None)) != "mleg":
+            continue
+        if _enum_value(getattr(order, "status", None)) != "filled":
+            continue
+        legs = list(getattr(order, "legs", None) or [])
+        qty = as_int(getattr(order, "filled_qty", None))
+        filled_at = getattr(order, "filled_at", None)
+        if len(legs) != 2 or not qty or filled_at is None:
+            logger.warning("skipping fill {}: not a two-leg filled spread", client_order_id)
+            continue
+        intents = {_enum_value(getattr(leg, "position_intent", None)) for leg in legs}
+        if intents == {"buy_to_open", "sell_to_open"}:
+            intent, long_intent = "enter", "buy_to_open"
+        elif intents == {"buy_to_close", "sell_to_close"}:
+            intent, long_intent = "exit", "sell_to_close"
+        else:
+            logger.warning("skipping fill {}: mixed leg intents {}", client_order_id, sorted(intents))
+            continue
+        net_price = 0.0
+        long_symbol = short_symbol = None
+        for leg in legs:
+            price = as_float(getattr(leg, "filled_avg_price", None))
+            symbol = str(getattr(leg, "symbol", None) or "")
+            if price is None or pos_and_risk.parse_occ(symbol) is None:
+                break
+            side = _enum_value(getattr(leg, "side", None))
+            net_price += price if side == "buy" else -price
+            if _enum_value(getattr(leg, "position_intent", None)) == long_intent:
+                long_symbol = symbol
+            else:
+                short_symbol = symbol
+        if long_symbol is None or short_symbol is None:
+            logger.warning("skipping fill {}: unreadable leg price or symbol", client_order_id)
+            continue
+        fills.append(
+            SpreadFill(
+                client_order_id=client_order_id,
+                filled_at=filled_at,
+                intent=intent,
+                long_symbol=long_symbol,
+                short_symbol=short_symbol,
+                qty=qty,
+                net_price=round(net_price, 4),
+            )
+        )
+    return fills
 
 
 def cancel_order(trading: Any, order_id: str) -> None:
