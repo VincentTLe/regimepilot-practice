@@ -55,6 +55,7 @@ def spy_only_whitelist(monkeypatch):
     monkeypatch.setattr(settings, "SYMBOLS", ("SPY",))
     monkeypatch.setattr(settings, "PER_ENTRY_FRACTION", 0.005)
     monkeypatch.setattr(settings, "PER_UNDERLYING_FRACTION", 0.02)
+    monkeypatch.setattr(settings, "ALLOW_STACKING", True)
     monkeypatch.setattr(settings, "MIN_WIDTH_PCT", 0.03)
     monkeypatch.setattr(settings, "MAX_WIDTH_PCT", 0.05)
     # Neutralize the signal-quality and debit-band filters: these tests exercise
@@ -168,9 +169,9 @@ def test_stop_loss_exit_is_planned_and_underlying_blocked():
     )
     assert record["exits"][0]["reason"] == "stop"
     assert record["exits"][0]["receipt"]["dry_run"] is True
-    # a held underlying is never also an entry candidate
+    # never add to an underlying we are exiting this cycle
     spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
-    assert spy["gate_block"] == "already_held"
+    assert spy["gate_block"] == "exiting"
     assert record["entry"] is None
 
 
@@ -194,7 +195,132 @@ def test_reversal_exit_on_opposing_event():
     assert record["exits"][0]["reason"] == "reversal"
     assert record["exits"][0]["receipt"]["dry_run"] is True
     spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
-    assert spy["gate_block"] == "already_held"  # opposing event still never re-enters
+    assert spy["gate_block"] == "exiting"  # opposing event still never re-enters
+
+
+HOLD_ZONE_MARKS = {  # net mark 2.0 on a 2.00-debit spread: neither stop nor take-profit
+    LONG_OCC: fake_snapshot(2.9, 3.1),
+    SHORT_OCC: fake_snapshot(0.9, 1.1),
+}
+
+
+def held_call_spread():
+    return [
+        fake_position(LONG_OCC, 1, 6.0, side="long"),
+        fake_position(SHORT_OCC, 1, 4.0, side="short"),  # 650/655 call spread, debit 2.00 = $200
+    ]
+
+
+def test_same_direction_add_on_held_underlying(monkeypatch):
+    """allow_stacking: a breakout_up on a held call spread is an ADD, sized by the
+    per-underlying room, and it never reuses a held leg."""
+    import settings
+
+    monkeypatch.setattr(settings, "PER_ENTRY_FRACTION", 0.012)  # $1,200 -> 2 contracts of $555
+    monkeypatch.setattr(settings, "PER_UNDERLYING_FRACTION", 0.012)  # $1,200 - $200 held -> 1 contract
+    contracts = entry_contracts() + [fake_contract("SPY260911C00665000", 665.0, EXP)]
+    trading = FakeTradingClient(positions=held_call_spread(), contracts=contracts)
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
+    )
+    snapshots = {**entry_chain_snapshots(), "SPY260911C00665000": fake_snapshot(1.5, 1.6, iv=0.22),
+                 **HOLD_ZONE_MARKS}
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient(snapshots), execute=False, manual_mode=True
+    )
+    assert record["exits"] == []
+    spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
+    assert spy["gate_block"] is None and spy["held"] == "CALL" and spy["events"] == ["breakout_up"]
+    entry = record["entry"]
+    assert entry["direction"] == "CALL" and "rejected" not in entry
+    # 655 is our held short leg: excluded, so the screener falls back to 645/675
+    assert entry["spread"]["long"] == "SPY260911C00645000"
+    assert entry["spread"]["short"] == "SPY260911C00675000"
+    assert entry["qty"] == 1  # per-underlying room binds, not per-entry
+    assert trading.submitted == []
+
+
+def test_opposing_event_on_held_underlying_is_not_an_add(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "REVERSAL_EXIT", False)  # otherwise the exit gate fires first
+    trading = FakeTradingClient(positions=held_call_spread())
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars(direction="down")}, quotes_by_symbol={"SPY": (649.9, 650.1)}
+    )
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient(HOLD_ZONE_MARKS), execute=False, manual_mode=True
+    )
+    assert record["exits"] == []
+    spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
+    assert spy["gate_block"] == "opposing_held" and spy["held"] == "CALL"
+    assert record["entry"] is None
+
+
+def test_decider_cannot_flip_direction_on_held_underlying(monkeypatch):
+    answers = itertools.cycle(["1", "PUT"])  # human picks SPY but asks for a PUT against the held calls
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    trading = FakeTradingClient(positions=held_call_spread(), contracts=entry_contracts())
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
+    )
+    snapshots = {**entry_chain_snapshots(), **HOLD_ZONE_MARKS}
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient(snapshots), execute=True, manual_mode=True
+    )
+    assert record["entry"]["rejected"] == "opposes_held_spread"
+    assert trading.submitted == []
+
+
+def test_add_never_reuses_held_legs():
+    # hold exactly the pair the screener would pick (655/675): excluding those legs
+    # leaves only 645, so no spread can be built
+    positions = [
+        fake_position("SPY260911C00655000", 1, 3.5, side="long"),
+        fake_position("SPY260911C00675000", 1, 0.55, side="short"),
+    ]
+    trading = FakeTradingClient(positions=positions, contracts=entry_contracts())
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
+    )
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient(entry_chain_snapshots()),
+        execute=True, manual_mode=True,
+    )
+    assert record["exits"] == []
+    assert record["entry"]["rejected"] == "no_spread"
+    assert trading.submitted == []
+
+
+def test_pending_order_on_underlying_gates_entry():
+    from types import SimpleNamespace
+
+    trading = FakeTradingClient(orders=[SimpleNamespace(symbol=LONG_OCC, legs=None)])
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
+    )
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient({}), execute=True, manual_mode=True
+    )
+    spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
+    assert spy["gate_block"] == "pending_order"
+    assert record["entry"] is None and trading.submitted == []
+
+
+def test_allow_stacking_off_keeps_one_spread_per_underlying(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "ALLOW_STACKING", False)
+    trading = FakeTradingClient(positions=held_call_spread(), contracts=entry_contracts())
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
+    )
+    record = cli.run_cycle(
+        make_config(), trading, stock, FakeOptionDataClient(HOLD_ZONE_MARKS), execute=True, manual_mode=True
+    )
+    spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
+    assert spy["gate_block"] == "already_held"
+    assert record["entry"] is None and trading.submitted == []
 
 
 def test_reversal_covers_held_underlying_outside_whitelist(monkeypatch):

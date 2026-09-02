@@ -30,7 +30,10 @@ Each candidate also carries its RSI, ATR and MACD histogram readings, plus
 advisory trend context: ema_fast_dist / ema_slow_dist are the last close minus
 a fast/slow trend EMA (positive = price above the anchor, an up-regime;
 negative = below). Weigh trend alignment - entering against both anchors needs
-a strong reason. Choose at most ONE candidate to enter, or pass.
+a strong reason. A candidate whose "held" field is set already has an open
+spread in that direction: entering it is an ADD to that position, and your
+direction must match it (code rejects any other direction). Choose at most
+ONE candidate to enter, or pass.
 
 Reply with strict JSON only:
 {"action": "enter" | "pass", "symbol": "<one of the candidate symbols>",
@@ -137,6 +140,7 @@ def decide_entry(
                 "macd_hist": c.macd_hist,
                 "ema_fast_dist": c.ema_fast_dist,
                 "ema_slow_dist": c.ema_slow_dist,
+                "held": c.held,
             }
             for c in tradeable
         ]
@@ -175,6 +179,7 @@ def manual_decide(
             f"  [{index}] {c.symbol:<6} spot={c.mid} events={events} "
             f"rsi={c.rsi} atr={c.atr} macd_hist={c.macd_hist} "
             f"ema_fast_dist={c.ema_fast_dist} ema_slow_dist={c.ema_slow_dist}"
+            + (f" held={c.held} (add)" if c.held else "")
         )
     raw = input_fn("Select a candidate number to trade (blank to pass): ").strip()
     if not raw.isdigit() or not (1 <= int(raw) <= len(tradeable)):

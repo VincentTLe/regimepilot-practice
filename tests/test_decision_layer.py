@@ -77,6 +77,22 @@ def test_decide_entry_end_to_end():
     assert choice is not None and choice.symbol == "QQQ" and choice.model == "test-model"
 
 
+def test_decide_entry_briefing_marks_adds_with_held_direction():
+    seen = {}
+
+    def handler(request):
+        seen["briefing"] = json.loads(json.loads(request.content)["messages"][1]["content"])
+        return httpx.Response(200, json=chat_body(json.dumps({"action": "pass"})))
+
+    from dataclasses import replace
+
+    add = replace(candidate("NVDA"), held="CALL")
+    decision_layer.decide_entry([candidate("SPY"), add], "key", transport=httpx.MockTransport(handler))
+    by_symbol = {c["symbol"]: c for c in seen["briefing"]["candidates"]}
+    assert by_symbol["NVDA"]["held"] == "CALL"
+    assert by_symbol["SPY"]["held"] is None
+
+
 def test_decide_entry_skips_blocked_candidates_entirely():
     # only blocked candidates -> no LLM call is even attempted (transport would 500)
     blocked = [candidate("SPY", block="stale_data")]

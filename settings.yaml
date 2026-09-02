@@ -46,6 +46,7 @@ risk:                        # position sizing — all fractions of LIVE account
   per_underlying_fraction: 0.015   # open premium at risk on ONE underlying <= this fraction (0.02 = $2k on $100k)
   per_cycle_fraction: 0.01   # new premium per cycle <= this fraction of equity
   total_fraction: 0.10       # total open premium at risk <= this fraction of equity
+  allow_stacking: true       # allow a further SAME-direction entry on an underlying already held (sized by per_underlying_fraction); false = one spread per underlying
 
 exits:                       # mechanical, checked every cycle — the LLM is never consulted
   stop_fraction: 0.5         # stop-loss: exit when net mark <= this fraction of entry debit (0.5 = -50%)

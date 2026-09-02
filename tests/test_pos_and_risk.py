@@ -201,6 +201,22 @@ def test_opposing_event_fired_mapping():
     assert pos_and_risk.opposing_event_fired(put_spread, put_event) is False
 
 
+def test_held_direction():
+    def spread(option_type, strike):
+        return OpenSpread(
+            underlying="SPY", expiration=date(2026, 9, 11), option_type=option_type,
+            long_symbol=f"SPY260911{option_type}{int(strike * 1000):08d}",
+            short_symbol=f"SPY260911{option_type}{int((strike + 5) * 1000):08d}",
+            qty=1, net_entry_debit=2.0,
+        )
+
+    assert pos_and_risk.held_direction([]) is None
+    assert pos_and_risk.held_direction([spread("C", 650)]) == "CALL"
+    assert pos_and_risk.held_direction([spread("C", 650), spread("C", 660)]) == "CALL"
+    assert pos_and_risk.held_direction([spread("P", 640)]) == "PUT"
+    assert pos_and_risk.held_direction([spread("C", 650), spread("P", 640)]) is None  # mixed: no add
+
+
 def test_reversal_exit_fires_between_stop_and_take_profit():
     # marks well inside the hold zone: only the opposing event can trigger this
     decision = pos_and_risk.exit_decision(

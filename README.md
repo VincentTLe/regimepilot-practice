@@ -109,7 +109,11 @@ the full review, evidence and rationale are in
   [docs/SPREAD_SELECTION.md](docs/SPREAD_SELECTION.md).
 - **Risk (from live equity, every cycle)**: per entry ≤ 0.5% of equity, open
   premium per underlying ≤ 1.5%, new premium per cycle ≤ 1%, total open premium
-  at risk ≤ 10%. Unknown equity or unknown open risk refuses entries.
+  at risk ≤ 10%. Unknown equity or unknown open risk refuses entries. An
+  underlying already held may take a further entry only in the **same
+  direction** as the held spread (`allow_stacking: true`, the default; `false`
+  = one spread per underlying); the per-underlying cap sizes the add, and the
+  add never reuses a held leg.
 - **Exits (mechanical only, before entries, every cycle)**: close the spread
   when net mark ≤ −50% of entry debit, ≥ +100%, DTE ≤ 2, or — the **reversal
   exit** (`reversal_exit: true`) — when an entry event fires *against* the

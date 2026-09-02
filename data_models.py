@@ -73,6 +73,7 @@ class SymbolFeatures:
     gate_block: str | None = None  # None = tradeable candidate
     ema_fast_dist: float | None = None  # close − fast trend EMA ($): advisory, never a gate
     ema_slow_dist: float | None = None  # close − slow trend EMA ($): advisory, never a gate
+    held: str | None = None  # "CALL"/"PUT" when a spread is already held: a new entry is an add
 
 
 @dataclass(frozen=True)

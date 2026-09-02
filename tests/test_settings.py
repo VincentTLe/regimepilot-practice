@@ -56,6 +56,7 @@ def broken(mutate) -> dict:
         (lambda r: r.update(symbols="SPY"), "symbols"),  # string, not a list
         (lambda r: r["llm"].update(primary_model=""), "llm.primary_model"),
         (lambda r: r["exits"].update(reversal_exit=1), "exits.reversal_exit"),  # must be a bool
+        (lambda r: r["risk"].update(allow_stacking=1), "risk.allow_stacking"),  # must be a bool
         (lambda r: r["signals"].update(macd_min_hist_atr=1.5), "signals.macd_min_hist_atr"),
         (lambda r: r["signals"].update(rsi_overbought=40), "signals.rsi_overbought"),  # < 50
         (lambda r: r["signals"].update(rsi_oversold=60), "signals.rsi_oversold"),  # > 50

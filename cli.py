@@ -29,6 +29,7 @@ import sounds
 from data_models import (
     Config,
     EntryChoice,
+    OpenSpread,
     OrderPlan,
     SpreadQuote,
     SymbolFeatures,
@@ -70,10 +71,22 @@ def _screen_spread(
     spot: float,
     clock_time: datetime,
     today,
+    exclude_symbols: frozenset[str] = frozenset(),
 ) -> tuple[SpreadQuote | None, dict]:
     """Fetch chains + snapshots for one underlying and pick the best spread
-    across the nearest settings.EXPIRIES_TO_SCREEN eligible expiries."""
+    across the nearest settings.EXPIRIES_TO_SCREEN eligible expiries.
+
+    `exclude_symbols` are legs we already hold on this underlying. An add must
+    never touch them: Alpaca nets positions per contract, so buying a strike we
+    are short would shrink the held leg, leave the held spread unpaired, and
+    put it beyond the stop/take-profit manager.
+    """
     by_expiry = broker.fetch_contracts(trading, underlying, direction, spot, today)
+    if exclude_symbols:
+        by_expiry = {
+            exp: {k: info for k, info in chain.items() if info["symbol"] not in exclude_symbols}
+            for exp, chain in by_expiry.items()
+        }
     expirations = options_screener.pick_expirations(
         options_screener.liquid_expirations(by_expiry, spot), today
     )
@@ -168,6 +181,7 @@ def run_cycle(
 
     # --- Position manager: mechanical exits run before entries and are never gated ---
     exits: list[dict] = []
+    exiting: set[str] = set()  # underlyings with an exit this cycle: never add to those
     if spreads:
         leg_symbols = [
             s for spread in spreads for s in (spread.long_symbol, spread.short_symbol)
@@ -220,6 +234,7 @@ def run_cycle(
                 else:
                     entry["receipt"] = _settle(trading, plan, execute)
             exits.append(entry)
+            exiting.add(spread.underlying)
             logger.info(
                 "exit {}: {}",
                 entry["spread"],
@@ -229,18 +244,25 @@ def run_cycle(
 
     # --- Entry candidates: whitelist symbols only ---
     whitelist_features = {symbol: features[symbol] for symbol in config.symbols}
-    busy = {s.underlying for s in spreads} | {
+    pending = {
         pos_and_risk.parse_occ(sym)[0]
         for sym in account.open_order_symbols
         if pos_and_risk.parse_occ(sym) is not None
     }
+    held_by_underlying: dict[str, list[OpenSpread]] = {}
+    for spread in spreads:
+        held_by_underlying.setdefault(spread.underlying, []).append(spread)
     candidates = []
     for c in signals.build_candidates(
         whitelist_features, clock.is_open, config.bar_seconds
     ):
-        if c.gate_block is None and c.symbol in busy:
-            # a held/pending underlying is not a candidate
-            c = replace(c, gate_block="already_held")
+        if c.gate_block is None:
+            c = _gate_held(
+                c,
+                held_by_underlying.get(c.symbol, []),
+                pending=c.symbol in pending,
+                exiting=c.symbol in exiting,
+            )
         candidates.append(c)
     record["candidates"] = [
         {
@@ -252,6 +274,7 @@ def run_cycle(
             "macd_hist": c.macd_hist,
             "ema_fast_dist": c.ema_fast_dist,
             "ema_slow_dist": c.ema_slow_dist,
+            "held": c.held,
             "gate_block": c.gate_block,
         }
         for c in candidates
@@ -265,22 +288,37 @@ def run_cycle(
         _decide(tradeable, config, manual_mode, llm_transport) if tradeable else None
     )
     if choice is not None:
-        underlying_risk = pos_and_risk.open_premium_at_risk(
-            [s for s in spreads if s.underlying == choice.symbol]
-        )
-        record["entry"] = _attempt_entry(
-            choice,
-            features[choice.symbol].mid,
-            config,
-            trading,
-            option_data,
-            account.equity,
-            open_risk,
-            underlying_risk,
-            account.open_order_symbols,
-            cycle_id,
-            execute,
-        )
+        held = held_by_underlying.get(choice.symbol, [])
+        if held and choice.direction != pos_and_risk.held_direction(held):
+            # Deterministic guard: an add must follow the held spread's direction,
+            # whatever the decider (LLM or human) replied.
+            record["entry"] = {
+                "symbol": choice.symbol,
+                "direction": choice.direction,
+                "thesis": choice.thesis,
+                "model": choice.model,
+                "rejected": "opposes_held_spread",
+            }
+            logger.info(
+                "entry refused: {} {} opposes the held spread", choice.symbol, choice.direction
+            )
+        else:
+            record["entry"] = _attempt_entry(
+                choice,
+                features[choice.symbol].mid,
+                config,
+                trading,
+                option_data,
+                account.equity,
+                open_risk,
+                pos_and_risk.open_premium_at_risk(held),
+                account.open_order_symbols,
+                cycle_id,
+                execute,
+                exclude_symbols=frozenset(
+                    leg for s in held for leg in (s.long_symbol, s.short_symbol)
+                ),
+            )
 
     submitted = [e for e in exits if e.get("receipt", {}).get("submitted")] or (
         record["entry"] or {}
@@ -292,6 +330,32 @@ def run_cycle(
     )
     append_journal(record)
     return record
+
+
+def _gate_held(
+    c: SymbolFeatures, held: list[OpenSpread], *, pending: bool, exiting: bool
+) -> SymbolFeatures:
+    """Entry gates for an underlying we already hold or have an open order on.
+
+    allow_stacking off: any held or pending underlying is out (already_held).
+    allow_stacking on: a further entry is allowed only as an ADD in the held
+    spread's direction — a pending order or a same-cycle exit still blocks,
+    events against the held direction are dropped, and the candidate carries
+    the held direction so the decider knows it is adding.
+    """
+    if not held and not pending:
+        return c
+    if not settings.ALLOW_STACKING:
+        return replace(c, gate_block="already_held")
+    if pending:
+        return replace(c, gate_block="pending_order")
+    if exiting:
+        return replace(c, gate_block="exiting")
+    direction = pos_and_risk.held_direction(held)  # None = mixed book, no add
+    aligned = tuple(e for e in c.events if e.direction == direction)
+    if not aligned:
+        return replace(c, gate_block="opposing_held", held=direction)
+    return replace(c, events=aligned, held=direction)
 
 
 def _build_trading_signals(
@@ -368,6 +432,7 @@ def _attempt_entry(
     pending_symbols: frozenset[str],
     cycle_id: str,
     execute: bool,
+    exclude_symbols: frozenset[str] = frozenset(),
 ) -> dict:
     entry: dict = {
         "symbol": choice.symbol,
@@ -391,6 +456,7 @@ def _attempt_entry(
             spot,
             screen_clock.server_time,
             screen_clock.server_time.date(),
+            exclude_symbols,
         )
     except broker.BrokerError as error:
         entry["rejected"] = str(error)

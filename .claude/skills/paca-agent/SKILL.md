@@ -26,7 +26,7 @@ uv run --env-file .env cli.py account 2>&1        # equity, open spreads, premiu
 tail -n 10 logs/cycles.jsonl                      # recent cycle history
 ```
 
-From the journal tail, note: recent outcomes, screen rejections (an underlying that repeatedly finds no acceptable spread will likely reject again), which underlyings are already held or pending (they gate out as `already_held`), and open-risk warnings.
+From the journal tail, note: recent outcomes, screen rejections (an underlying that repeatedly finds no acceptable spread will likely reject again), which underlyings are already held or pending (a pending order gates out as `pending_order`, a same-cycle exit as `exiting`, an event against the held direction as `opposing_held`; with `allow_stacking: false` anything held gates as `already_held`) — a held underlying can still be a candidate for a same-direction add, and its `held` field names that direction — and open-risk warnings.
 
 If the market is closed or no candidate passes its gate, skip to Step 3 and run the cycle anyway (it journals the state and runs exits when relevant), then deploy.
 
