@@ -85,11 +85,13 @@ def _string_list(value: object, path: str) -> tuple[str, ...]:
 _TOP_KEYS = {"symbols", "bar_timeframe", "loop_interval_seconds",
              "signals", "screener", "risk", "exits", "llm"}
 _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_signal",
-                "atr_event_mult", "stale_bar_factor", "min_bars"}
+                "atr_event_mult", "stale_bar_factor", "min_bars",
+                "macd_min_hist_atr", "rsi_overbought", "rsi_oversold"}
 _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
                   "strike_band_pct", "otm_only", "min_width_pct", "max_width_pct",
                   "min_open_interest", "max_quote_age_seconds", "max_leg_spread_bps",
-                  "min_net_debit", "min_liquid_legs_per_expiry"}
+                  "min_net_debit", "min_liquid_legs_per_expiry",
+                  "min_debit_frac", "max_debit_frac"}
 _RISK_KEYS = {"per_entry_fraction", "per_underlying_fraction", "per_cycle_fraction",
               "total_fraction"}
 _EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit"}
@@ -128,6 +130,11 @@ def validate(raw: object) -> dict[str, object]:
     values["STALE_BAR_FACTOR"] = _number(sig, "signals", "stale_bar_factor", 1)
     values["MIN_BARS"] = _integer(sig, "signals", "min_bars",
                                   values["MACD_SLOW"] + values["MACD_SIGNAL"])
+    values["MACD_MIN_HIST_ATR"] = _number(sig, "signals", "macd_min_hist_atr", 0, 1)
+    values["RSI_OVERBOUGHT"] = _number(sig, "signals", "rsi_overbought", 50, 100)
+    values["RSI_OVERSOLD"] = _number(sig, "signals", "rsi_oversold", 0, 50)
+    if values["RSI_OVERSOLD"] >= values["RSI_OVERBOUGHT"]:
+        _fail("signals.rsi_oversold", "must be smaller than rsi_overbought", sig["rsi_oversold"])
 
     scr = _section(raw, "screener", _SCREENER_KEYS)
     values["MIN_DTE"] = _integer(scr, "screener", "min_dte", 1)
@@ -147,6 +154,10 @@ def validate(raw: object) -> dict[str, object]:
     values["MAX_QUOTE_AGE_SECONDS"] = _number(scr, "screener", "max_quote_age_seconds", 0, lo_open=True)
     values["MAX_LEG_SPREAD_BPS"] = _number(scr, "screener", "max_leg_spread_bps", 0, lo_open=True)
     values["MIN_NET_DEBIT"] = _number(scr, "screener", "min_net_debit", 0, lo_open=True)
+    values["MIN_DEBIT_FRAC"] = _number(scr, "screener", "min_debit_frac", 0, 1, lo_open=True, hi_open=True)
+    values["MAX_DEBIT_FRAC"] = _number(scr, "screener", "max_debit_frac", 0, 1, lo_open=True, hi_open=True)
+    if values["MIN_DEBIT_FRAC"] > values["MAX_DEBIT_FRAC"]:
+        _fail("screener.min_debit_frac", "must not exceed max_debit_frac", scr["min_debit_frac"])
 
     risk = _section(raw, "risk", _RISK_KEYS)
     values["PER_ENTRY_FRACTION"] = _number(risk, "risk", "per_entry_fraction", 0, 1, lo_open=True)
@@ -208,6 +219,9 @@ MACD_SIGNAL: int = _VALUES["MACD_SIGNAL"]  # type: ignore[assignment]
 ATR_EVENT_MULT: float = _VALUES["ATR_EVENT_MULT"]  # type: ignore[assignment]
 STALE_BAR_FACTOR: float = _VALUES["STALE_BAR_FACTOR"]  # type: ignore[assignment]
 MIN_BARS: int = _VALUES["MIN_BARS"]  # type: ignore[assignment]
+MACD_MIN_HIST_ATR: float = _VALUES["MACD_MIN_HIST_ATR"]  # type: ignore[assignment]
+RSI_OVERBOUGHT: float = _VALUES["RSI_OVERBOUGHT"]  # type: ignore[assignment]
+RSI_OVERSOLD: float = _VALUES["RSI_OVERSOLD"]  # type: ignore[assignment]
 MIN_DTE: int = _VALUES["MIN_DTE"]  # type: ignore[assignment]
 MAX_EXPIRY_LOOKAHEAD_DAYS: int = _VALUES["MAX_EXPIRY_LOOKAHEAD_DAYS"]  # type: ignore[assignment]
 EXPIRIES_TO_SCREEN: int = _VALUES["EXPIRIES_TO_SCREEN"]  # type: ignore[assignment]
@@ -220,6 +234,8 @@ MIN_LIQUID_LEGS_PER_EXPIRY: int = _VALUES["MIN_LIQUID_LEGS_PER_EXPIRY"]  # type:
 MAX_QUOTE_AGE_SECONDS: float = _VALUES["MAX_QUOTE_AGE_SECONDS"]  # type: ignore[assignment]
 MAX_LEG_SPREAD_BPS: float = _VALUES["MAX_LEG_SPREAD_BPS"]  # type: ignore[assignment]
 MIN_NET_DEBIT: float = _VALUES["MIN_NET_DEBIT"]  # type: ignore[assignment]
+MIN_DEBIT_FRAC: float = _VALUES["MIN_DEBIT_FRAC"]  # type: ignore[assignment]
+MAX_DEBIT_FRAC: float = _VALUES["MAX_DEBIT_FRAC"]  # type: ignore[assignment]
 PER_ENTRY_FRACTION: float = _VALUES["PER_ENTRY_FRACTION"]  # type: ignore[assignment]
 PER_UNDERLYING_FRACTION: float = _VALUES["PER_UNDERLYING_FRACTION"]  # type: ignore[assignment]
 PER_CYCLE_FRACTION: float = _VALUES["PER_CYCLE_FRACTION"]  # type: ignore[assignment]

@@ -57,6 +57,13 @@ def spy_only_whitelist(monkeypatch):
     monkeypatch.setattr(settings, "PER_UNDERLYING_FRACTION", 0.02)
     monkeypatch.setattr(settings, "MIN_WIDTH_PCT", 0.03)
     monkeypatch.setattr(settings, "MAX_WIDTH_PCT", 0.05)
+    # Neutralize the signal-quality and debit-band filters: these tests exercise
+    # the cycle plumbing, not thresholds (which have their own dedicated tests).
+    monkeypatch.setattr(settings, "MACD_MIN_HIST_ATR", 0.0)
+    monkeypatch.setattr(settings, "RSI_OVERBOUGHT", 101.0)
+    monkeypatch.setattr(settings, "RSI_OVERSOLD", -1.0)
+    monkeypatch.setattr(settings, "MIN_DEBIT_FRAC", 0.01)
+    monkeypatch.setattr(settings, "MAX_DEBIT_FRAC", 0.99)
 
 
 def make_config():

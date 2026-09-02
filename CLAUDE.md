@@ -8,6 +8,15 @@ Build a small, understandable, reliable AI options trading agent for the Alpaca 
 
 This is a hackathon project, not production trading infrastructure.
 
+### Hackathon
+
+[Alpaca AI Trading Agents Hackathon](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon)
+on lablab.ai — Aug 28 to Sep 4, 2026, **submissions due Sep 4, 15:00 UTC**.
+Participants build autonomous AI trading agents on Alpaca (Trading API, MCP
+server, CLI); judges review finalist submissions ($6,000 prize pool). The
+detailed judging rubric is not published on an accessible page, so assume the
+demo, the write-up, and a visibly working agent all matter — not just paper P&L.
+
 Optimize for:
 
 * working correctly during the competition

@@ -1,7 +1,8 @@
 # PACA — Position-aware Agentic Capital Allocator
 
-Options vertical spreads, paper only. An autonomous paper-trading agent for the **Alpaca AI Trading Agents Hackathon**
-(Aug 28 – Sep 4, 2026). Every cycle it scores a **whitelist of candidate
+Options vertical spreads, paper only. An autonomous paper-trading agent for the
+[**Alpaca AI Trading Agents Hackathon**](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon)
+(Aug 28 – Sep 4, 2026, submissions due Sep 4 15:00 UTC). Every cycle it scores a **whitelist of candidate
 underlyings**, lets an LLM pick at most one entry, and trades **debit vertical
 spreads** as single multi-leg (MLEG) limit orders. Exits are purely mechanical.
 

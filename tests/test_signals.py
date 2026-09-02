@@ -41,6 +41,11 @@ def test_rsi_bounds_and_direction():
     assert 0.0 <= rsi_down < 30.0
 
 
+def test_rsi_flat_series_is_neutral():
+    flat = frame([ohlc(100.0, 100.0, 100.0, 100.0) for _ in range(60)])
+    assert signals.add_indicators(flat)["rsi"].iloc[-1] == 50.0  # not overbought
+
+
 def test_atr_converges_to_constant_true_range():
     df = signals.add_indicators(frame(quiet_rows(120)))
     assert df["atr"].iloc[-1] == pytest.approx(1.0, abs=0.05)  # high-low is 1.0 every bar
@@ -94,6 +99,23 @@ def test_macd_cross_events():
     assert [e.kind for e in signals.detect_events(df)] == ["macd_cross_down"]
     df["macd_hist"] = [0.5, 0.7]  # same sign: no cross
     assert signals.detect_events(df) == ()
+
+
+def test_macd_cross_needs_magnitude(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "MACD_MIN_HIST_ATR", 0.05)
+    prev = ohlc(100, 100.5, 99.5, 100.0)
+    last = ohlc(100, 100.5, 99.5, 100.0)
+    df = event_frame(prev, last)  # atr defaults to 1.0 -> floor is |hist| >= 0.05
+    df["macd_hist"] = [-0.5, 0.049]  # sub-threshold flip: chop, not momentum
+    assert signals.detect_events(df) == ()
+    df["macd_hist"] = [-0.5, 0.05]  # exactly at the floor fires
+    assert [e.kind for e in signals.detect_events(df)] == ["macd_cross_up"]
+    df["macd_hist"] = [0.5, -0.049]
+    assert signals.detect_events(df) == ()
+    df["macd_hist"] = [0.5, -0.05]
+    assert [e.kind for e in signals.detect_events(df)] == ["macd_cross_down"]
 
 
 def test_events_need_usable_atr_and_two_bars():
@@ -168,3 +190,34 @@ def test_build_candidates_marks_every_symbol_and_keeps_preset_blocks():
     assert by_symbol["SPY"].gate_block is None
     assert by_symbol["QQQ"].gate_block == "no_event"
     assert by_symbol["NVDA"].gate_block == "data_error"  # a preset block survives
+
+
+def test_entry_events_drops_exhausted_directions(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "RSI_OVERBOUGHT", 70.0)
+    monkeypatch.setattr(settings, "RSI_OVERSOLD", 30.0)
+    call = signals.Event(kind="breakout_up", direction="CALL")
+    put = signals.Event(kind="macd_cross_down", direction="PUT")
+    overbought = make_features(rsi=70.0, events=(call, put))
+    assert signals.entry_events(overbought) == (put,)  # CALL dropped at/above 70
+    oversold = make_features(rsi=30.0, events=(call, put))
+    assert signals.entry_events(oversold) == (call,)  # PUT dropped at/below 30
+    midrange = make_features(rsi=55.0, events=(call, put))
+    assert signals.entry_events(midrange) == (call, put)
+    unknown = make_features(rsi=None, events=(call,))
+    assert signals.entry_events(unknown) == (call,)  # no RSI -> no filtering
+
+
+def test_build_candidates_gates_exhausted_symbol_but_exits_see_raw_events(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "RSI_OVERBOUGHT", 70.0)
+    monkeypatch.setattr(settings, "RSI_OVERSOLD", 30.0)
+    call = signals.Event(kind="gap_up", direction="CALL")
+    features = {"SPY": make_features(rsi=75.0, events=(call,))}
+    (candidate,) = signals.build_candidates(features, True, BAR_SECONDS)
+    assert candidate.gate_block == "rsi_exhausted"
+    assert candidate.events == ()  # not offered for entry
+    # the raw features are untouched: the exit path (reversal) still sees the event
+    assert features["SPY"].events == (call,)

@@ -97,7 +97,9 @@ def enumerate_spreads(
     (out of the money, or the ATM strike bracketing spot, when
     settings.OTM_ONLY) and pass check_leg; the
     width must be within [MIN_WIDTH_PCT, MAX_WIDTH_PCT] of spot; the spread
-    must price sanely (settings.MIN_NET_DEBIT <= debit < width).
+    must price sanely (settings.MIN_NET_DEBIT <= debit < width) and the debit
+    must sit inside [MIN_DEBIT_FRAC, MAX_DEBIT_FRAC] of width — a cheap debit
+    means a deep-OTM lottery ticket, an expensive one has no payoff left.
     """
     lo, hi = spot * (1 - settings.STRIKE_BAND_PCT), spot * (1 + settings.STRIKE_BAND_PCT)
     in_band = [s for s in quotes_by_strike if lo <= s <= hi]
@@ -148,6 +150,9 @@ def enumerate_spreads(
             net_debit = round(long_leg.ask - short_leg.bid, 2)  # type: ignore[operator]
             if not (settings.MIN_NET_DEBIT <= net_debit < width):
                 _reject("bad_debit")
+                continue
+            if not (settings.MIN_DEBIT_FRAC * width <= net_debit <= settings.MAX_DEBIT_FRAC * width):
+                _reject("debit_out_of_band")
                 continue
             skew = abs(short_leg.implied_vol - long_leg.implied_vol)  # type: ignore[operator]
             spreads.append(

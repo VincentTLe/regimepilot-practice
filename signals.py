@@ -6,10 +6,16 @@ completed bar (approved 2026-08-31):
 
   - gap:      |bar open - previous bar close| > 2 x ATR
   - breakout: |bar close - bar open|          > 2 x ATR
-  - MACD histogram crossing zero (either direction)
+  - MACD histogram crossing zero (either direction), only when the new
+    histogram magnitude is at least MACD_MIN_HIST_ATR x ATR (approved
+    2026-09-02: bare sign flips whipsawed every position on 2026-09-01)
 
 ATR is read as of the PREVIOUS bar so the event bar cannot inflate its own
 trigger. Missing data yields None / no event, never a substituted value.
+
+Entry candidacy additionally drops exhausted-direction events (RSI >=
+RSI_OVERBOUGHT blocks CALL events, RSI <= RSI_OVERSOLD blocks PUT events);
+exits keep seeing the unfiltered events via SymbolFeatures.events.
 """
 
 from __future__ import annotations
@@ -31,7 +37,8 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     gain = delta.clip(lower=0.0).ewm(alpha=1 / settings.RSI_PERIOD, adjust=False).mean()
     loss = (-delta.clip(upper=0.0)).ewm(alpha=1 / settings.RSI_PERIOD, adjust=False).mean()
     out["rsi"] = 100.0 - 100.0 / (1.0 + gain / loss)
-    out.loc[loss == 0.0, "rsi"] = 100.0
+    out.loc[(loss == 0.0) & (gain > 0.0), "rsi"] = 100.0
+    out.loc[(loss == 0.0) & (gain == 0.0), "rsi"] = 50.0  # flat run is neutral, not overbought
 
     prev_close = close.shift(1)
     true_range = pd.concat(
@@ -66,7 +73,11 @@ def detect_events(df: pd.DataFrame) -> tuple[Event, ...]:
         events.append(Event(kind="breakout_up" if body > 0 else "breakout_down",
                             direction="CALL" if body > 0 else "PUT"))
     hist, prev_hist = last["macd_hist"], prev["macd_hist"]
-    if not pd.isna(hist) and not pd.isna(prev_hist):
+    if (
+        not pd.isna(hist)
+        and not pd.isna(prev_hist)
+        and abs(hist) >= settings.MACD_MIN_HIST_ATR * atr  # sub-threshold flips are chop, not momentum
+    ):
         if prev_hist <= 0 < hist:
             events.append(Event(kind="macd_cross_up", direction="CALL"))
         elif prev_hist >= 0 > hist:
@@ -124,16 +135,41 @@ def gate_block(features: SymbolFeatures, market_is_open: bool, bar_seconds: int)
     return None
 
 
+def entry_events(features: SymbolFeatures) -> tuple[Event, ...]:
+    """Events eligible for a NEW entry: exhausted-direction events are dropped.
+
+    RSI >= RSI_OVERBOUGHT drops CALL events (chasing a spent up-move);
+    RSI <= RSI_OVERSOLD drops PUT events. Exits are driven by the unfiltered
+    SymbolFeatures.events upstream — a capitulation gap must still close a
+    held position, so this filter applies only to entry candidacy.
+    """
+    if features.rsi is None:
+        return features.events
+    return tuple(
+        event
+        for event in features.events
+        if not (event.direction == "CALL" and features.rsi >= settings.RSI_OVERBOUGHT)
+        and not (event.direction == "PUT" and features.rsi <= settings.RSI_OVERSOLD)
+    )
+
+
 def build_candidates(
     features_by_symbol: dict[str, SymbolFeatures],
     market_is_open: bool,
     bar_seconds: int,
 ) -> list[SymbolFeatures]:
-    """Gate every symbol; return all of them with gate_block filled in."""
+    """Gate every symbol; return all of them with gate_block filled in.
+
+    Candidates carry the RSI-filtered entry events; a symbol whose events all
+    fall to the exhaustion filter gates as rsi_exhausted.
+    """
     out = []
     for symbol in sorted(features_by_symbol):
         features = features_by_symbol[symbol]
+        tradeable_events = entry_events(features)
         block = features.gate_block or gate_block(features, market_is_open, bar_seconds)
+        if block is None and features.events and not tradeable_events:
+            block = "rsi_exhausted"
         out.append(
             SymbolFeatures(
                 symbol=features.symbol,
@@ -141,7 +177,7 @@ def build_candidates(
                 rsi=features.rsi,
                 atr=features.atr,
                 macd_hist=features.macd_hist,
-                events=features.events,
+                events=tradeable_events,
                 bar_age_seconds=features.bar_age_seconds,
                 gate_block=block,
             )

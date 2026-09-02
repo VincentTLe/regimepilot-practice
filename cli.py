@@ -453,6 +453,9 @@ def _attempt_entry(
     if not (settings.MIN_NET_DEBIT <= fresh_debit < spread.width):
         entry["rejected"] = "recheck: bad_debit"
         return entry
+    if not (settings.MIN_DEBIT_FRAC * spread.width <= fresh_debit <= settings.MAX_DEBIT_FRAC * spread.width):
+        entry["rejected"] = "recheck: debit_out_of_band"
+        return entry
     qty, reason = pos_and_risk.size_entry(
         fresh_debit, fresh_account.equity, open_risk, underlying_risk, cycle_spent=0.0
     )

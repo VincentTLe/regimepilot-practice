@@ -20,6 +20,9 @@ def pinned_screener_settings(monkeypatch):
     monkeypatch.setattr(settings, "MIN_WIDTH_PCT", 0.03)
     monkeypatch.setattr(settings, "MAX_WIDTH_PCT", 0.05)
     monkeypatch.setattr(settings, "EXPIRIES_TO_SCREEN", 3)
+    # Wide-open debit band: the band has its own dedicated test below.
+    monkeypatch.setattr(settings, "MIN_DEBIT_FRAC", 0.01)
+    monkeypatch.setattr(settings, "MAX_DEBIT_FRAC", 0.99)
 
 
 def leg(
@@ -186,6 +189,20 @@ def test_otm_plus_atm_put_keeps_bracketing_strike(monkeypatch):
     assert {(s.long.strike, s.short.strike) for s in spreads} == {
         (99.0, 96.0), (100.0, 96.0), (100.0, 97.0),
     }
+
+
+def test_debit_band_rejects_lottery_and_overpriced(monkeypatch):
+    monkeypatch.setattr(settings, "MIN_DEBIT_FRAC", 0.25)
+    monkeypatch.setattr(settings, "MAX_DEBIT_FRAC", 0.45)
+    quotes = {
+        95.0: leg("C95", 95.0, bid=6.0, ask=6.1),     # 95/100: debit 2.7 / width 5 = 0.54 -> too expensive
+        100.0: leg("C100", 100.0, bid=3.4, ask=3.5),
+        103.0: leg("C103", 103.0, bid=3.0, ask=3.05),  # 100/103: debit 0.5 / width 3 = 0.17 -> lottery ticket
+        105.0: leg("C105", 105.0, bid=1.5, ask=1.55),  # 100/105: debit 2.0 / width 5 = 0.40 -> kept
+    }
+    spreads, rejections = screener.enumerate_spreads(quotes, "CALL", 100.0, EXP, "SPY", NOW)
+    assert {(s.long.symbol, s.short.symbol) for s in spreads} == {("C100", "C105")}
+    assert rejections.get("debit_out_of_band") == 2
 
 
 def test_debit_sanity_rejections():
