@@ -7,8 +7,9 @@ spreads** as single multi-leg (MLEG) limit orders. Exits are purely mechanical.
 
 > [!TIP]
 > **Live dashboard**: [alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh](https://alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh)
-> — cycle journal, open positions, and trading config, refreshed on every
-> [`/paca-agent` run](#running-the-paca-agent).
+> — cycle journal, open positions with unrealized PnL, realized PnL per closed
+> spread, and trading config, refreshed on every
+> [`/paca-agent` run](#running-the-paca-agent) via `deploy.sh` and `pnl.py`.
 
 > **Full rewrite (2026-08-31).** The previous phased single-underlying package
 > (`src/regimepilot/`) was replaced with 7 flat modules. The old code lives in

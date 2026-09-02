@@ -143,3 +143,20 @@ def test_realized_cli_table(monkeypatch):
     result = CliRunner().invoke(pnl.app, ["realized", "--days", "7"])
     assert result.exit_code == 0, result.output
     assert "-33.0" in result.stdout and "total pnl: -33.00" in result.stdout
+
+
+def test_realized_cli_json_shape_for_dashboard(monkeypatch):
+    trading = FakeTradingClient(closed_orders=[
+        fake_mleg_fill("sp-1-enter-AAPL", [(LONG, "buy", "buy_to_open", 3.9), (SHORT, "sell", "sell_to_open", 1.25)], 1),
+        fake_mleg_fill("sp-2-exit-AAPL-260911C", [(LONG, "sell", "sell_to_close", 3.5), (SHORT, "buy", "buy_to_close", 1.18)], 1,
+                       filled_at=NOW + timedelta(minutes=5)),
+    ])
+    monkeypatch.setattr(pnl, "_bootstrap", lambda: (None, trading))
+    result = CliRunner().invoke(pnl.app, ["realized", "--json"])
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.stdout)
+    assert len(rows) == 1
+    # Keys the surge dashboard's Realized tab reads.
+    assert set(pnl.REALIZED_COLUMNS) <= set(rows[0])
+    assert rows[0]["pnl"] == -33.0 and rows[0]["unmatched_qty"] == 0
+    assert rows[0]["exited_at"].startswith("2026-08-31 15:05:00")
