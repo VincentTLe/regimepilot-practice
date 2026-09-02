@@ -58,6 +58,10 @@ Still open, deliberately deferred:
   twice. Record acted-on (symbol, bar timestamp) pairs.
 - **Higher-timeframe trend alignment gate** — the pre-rewrite journal had
   `momentum_align`; restore a 1h/daily EMA (or similar) agreement check for entries.
+  *Advisory step landed 2026-09-02*: 25/50-bar EMA distances are computed, journaled
+  and shown to the decider (`trend_ema_fast`/`trend_ema_slow` in settings.yaml).
+  Hardening into an `against_trend` gate stays deferred until `/trading-review`
+  evidence supports it.
 - **Exit-mark quality** — stop/take-profit marks bypass `options_screener.check_leg`
   (cli.py exit path), so a stale or absurdly wide quote can trigger them.
 - **Pre-existing test failures (not from this work)** — the three

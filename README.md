@@ -83,6 +83,9 @@ the full review, evidence and rationale are in
   quote present, event fired, and the **RSI exhaustion gate** (entries only):
   CALL events are dropped at RSI ≥ 70, PUT events at RSI ≤ 30. Trading near the
   open and the close is allowed. A held or pending underlying is not a candidate.
+  **Advisory trend context**: distances of the last close from a 25-bar and a
+  50-bar EMA are journaled and shown to the decider (not a gate) — pending
+  review evidence before hardening into an `against_trend` gate.
 - **Decision**: the LLM sees the event-firing candidates (events + RSI/ATR/MACD
   readings) and returns `{action, symbol, direction, thesis}`. Malformed output
   means no entry. Deterministic code picks everything else.

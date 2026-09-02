@@ -71,6 +71,8 @@ class SymbolFeatures:
     events: tuple[Event, ...]
     bar_age_seconds: float | None
     gate_block: str | None = None  # None = tradeable candidate
+    ema_fast_dist: float | None = None  # close − fast trend EMA ($): advisory, never a gate
+    ema_slow_dist: float | None = None  # close − slow trend EMA ($): advisory, never a gate
 
 
 @dataclass(frozen=True)

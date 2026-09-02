@@ -20,6 +20,8 @@ signals:                     # technical analysis + entry events
   macd_min_hist_atr: 0.05    # MACD cross fires only when |histogram| >= this many ATRs (0 = any sign flip)
   rsi_overbought: 70         # entries only: drop CALL events at/above this RSI (exhausted up-move)
   rsi_oversold: 30           # entries only: drop PUT events at/below this RSI (exhausted down-move)
+  trend_ema_fast: 25         # advisory trend anchor, bars (~2h on 5m): journaled + shown to the decider, NOT a gate
+  trend_ema_slow: 50         # advisory trend anchor, bars (~4h on 5m): journaled + shown to the decider, NOT a gate
   stale_bar_factor: 2.0      # block entries when the last bar is older than this many bar durations
   min_bars: 40               # completed bars required before indicators count (>= macd_slow + macd_signal)
 

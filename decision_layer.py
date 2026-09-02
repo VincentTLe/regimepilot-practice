@@ -26,8 +26,11 @@ at least one technical event on its latest completed bar:
   gap_up / gap_down           - bar opened more than 2 ATR away from the prior close
   breakout_up / breakout_down - bar body (close minus open) exceeded 2 ATR
   macd_cross_up / macd_cross_down - MACD histogram crossed zero
-Each candidate also carries its RSI, ATR and MACD histogram readings. Choose at
-most ONE candidate to enter, or pass.
+Each candidate also carries its RSI, ATR and MACD histogram readings, plus
+advisory trend context: ema_fast_dist / ema_slow_dist are the last close minus
+a fast/slow trend EMA (positive = price above the anchor, an up-regime;
+negative = below). Weigh trend alignment - entering against both anchors needs
+a strong reason. Choose at most ONE candidate to enter, or pass.
 
 Reply with strict JSON only:
 {"action": "enter" | "pass", "symbol": "<one of the candidate symbols>",
@@ -132,6 +135,8 @@ def decide_entry(
                 "rsi": c.rsi,
                 "atr": c.atr,
                 "macd_hist": c.macd_hist,
+                "ema_fast_dist": c.ema_fast_dist,
+                "ema_slow_dist": c.ema_slow_dist,
             }
             for c in tradeable
         ]
@@ -168,7 +173,8 @@ def manual_decide(
         events = ", ".join(e.kind for e in c.events)
         echo(
             f"  [{index}] {c.symbol:<6} spot={c.mid} events={events} "
-            f"rsi={c.rsi} atr={c.atr} macd_hist={c.macd_hist}"
+            f"rsi={c.rsi} atr={c.atr} macd_hist={c.macd_hist} "
+            f"ema_fast_dist={c.ema_fast_dist} ema_slow_dist={c.ema_slow_dist}"
         )
     raw = input_fn("Select a candidate number to trade (blank to pass): ").strip()
     if not raw.isdigit() or not (1 <= int(raw) <= len(tradeable)):

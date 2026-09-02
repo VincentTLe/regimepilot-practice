@@ -250,6 +250,8 @@ def run_cycle(
             "rsi": c.rsi,
             "atr": c.atr,
             "macd_hist": c.macd_hist,
+            "ema_fast_dist": c.ema_fast_dist,
+            "ema_slow_dist": c.ema_slow_dist,
             "gate_block": c.gate_block,
         }
         for c in candidates
@@ -739,8 +741,11 @@ def candidates() -> None:
         rsi = f"{c.rsi:.1f}" if c.rsi is not None else "-"
         atr = f"{c.atr:.3f}" if c.atr is not None else "-"
         hist = f"{c.macd_hist:+.4f}" if c.macd_hist is not None else "-"
+        ema_fast = f"{c.ema_fast_dist:+.2f}" if c.ema_fast_dist is not None else "-"
+        ema_slow = f"{c.ema_slow_dist:+.2f}" if c.ema_slow_dist is not None else "-"
         typer.echo(
             f"{c.symbol:<6} mid={c.mid} rsi={rsi} atr={atr} macd_hist={hist} "
+            f"ema{settings.TREND_EMA_FAST}={ema_fast} ema{settings.TREND_EMA_SLOW}={ema_slow} "
             f"events={events} gate={c.gate_block or 'PASS'}"
         )
 

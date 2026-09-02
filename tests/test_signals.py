@@ -57,7 +57,22 @@ def test_macd_hist_positive_after_fresh_uptrend():
     ]
     df = signals.add_indicators(frame(rows))
     assert df["macd_hist"].iloc[-1] > 0
-    assert {"rsi", "atr", "macd", "macd_signal", "macd_hist"} <= set(df.columns)
+    assert {"rsi", "atr", "macd", "macd_signal", "macd_hist", "ema_fast", "ema_slow"} <= set(df.columns)
+
+
+def test_trend_ema_distances_sign_and_short_history():
+    rising = signals.add_indicators(frame([ohlc(100 + i, 100.6 + i, 99.5 + i, 100.5 + i) for i in range(60)]))
+    features = signals.build_signal("SPY", rising, 100.0, NOW, BAR_SECONDS)
+    # in a steady uptrend the close sits above both trailing EMAs
+    assert features.ema_fast_dist is not None and features.ema_fast_dist > 0
+    assert features.ema_slow_dist is not None and features.ema_slow_dist > 0
+    # the slower anchor trails further behind the rising close
+    assert features.ema_slow_dist > features.ema_fast_dist
+    import settings
+
+    short = signals.add_indicators(frame(quiet_rows(settings.MIN_BARS - 1)))
+    thin = signals.build_signal("SPY", short, 100.0, NOW, BAR_SECONDS)
+    assert thin.ema_fast_dist is None and thin.ema_slow_dist is None
 
 
 # --- events (hand-built atr/macd_hist for exact boundaries) ---

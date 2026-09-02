@@ -63,6 +63,8 @@ def broken(mutate) -> dict:
         (lambda r: r["screener"].update(min_debit_frac=0), "screener.min_debit_frac"),
         (lambda r: r["screener"].update(max_debit_frac=1), "screener.max_debit_frac"),
         (lambda r: r["screener"].update(min_debit_frac=0.5, max_debit_frac=0.4), "screener.min_debit_frac"),  # > max
+        (lambda r: r["signals"].update(trend_ema_fast=0), "signals.trend_ema_fast"),
+        (lambda r: r["signals"].update(trend_ema_fast=50, trend_ema_slow=50), "signals.trend_ema_fast"),  # >= slow
     ],
 )
 def test_validate_rejects_and_names_the_key(mutate, expect_in_message):

@@ -51,6 +51,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["macd"] = macd
     out["macd_signal"] = macd.ewm(span=settings.MACD_SIGNAL, adjust=False).mean()
     out["macd_hist"] = out["macd"] - out["macd_signal"]
+
+    # Advisory trend anchors (journaled + shown to the decider; never a gate).
+    out["ema_fast"] = close.ewm(span=settings.TREND_EMA_FAST, adjust=False).mean()
+    out["ema_slow"] = close.ewm(span=settings.TREND_EMA_SLOW, adjust=False).mean()
     return out
 
 
@@ -104,6 +108,10 @@ def build_signal(
         value = df[column].iloc[-1]
         return None if pd.isna(value) else float(value)
 
+    def _dist(ema_column: str) -> float | None:
+        close, ema = _last("close"), _last(ema_column)
+        return None if close is None or ema is None else close - ema
+
     return SymbolFeatures(
         symbol=symbol,
         mid=mid,
@@ -112,6 +120,8 @@ def build_signal(
         macd_hist=_last("macd_hist"),
         events=detect_events(df) if enough else (),
         bar_age_seconds=bar_age,
+        ema_fast_dist=_dist("ema_fast"),
+        ema_slow_dist=_dist("ema_slow"),
     )
 
 
@@ -180,6 +190,8 @@ def build_candidates(
                 events=tradeable_events,
                 bar_age_seconds=features.bar_age_seconds,
                 gate_block=block,
+                ema_fast_dist=features.ema_fast_dist,
+                ema_slow_dist=features.ema_slow_dist,
             )
         )
     return out
