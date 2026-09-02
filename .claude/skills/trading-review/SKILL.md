@@ -1,12 +1,12 @@
 ---
 name: trading-review
-description: Post-close review of a PACA trading day — digest the cycle journal and PnL, score the previous review's watch-items, grade the day's entry/pass decisions, prepend a dated review to trading_review.md, then recommend improvements and apply only what the user picks. Use when the user asks to "review today's trading", "run the trading review", "post-market review", "daily review", "how did we trade today", or "grade today's trades".
+description: Post-close review of a PACA trading day — digest the cycle journal and PnL, score the previous review's watch-items, grade the day's entry/pass decisions, prepend a dated review to docs/trading_review.md, then recommend improvements and apply only what the user picks. Use when the user asks to "review today's trading", "run the trading review", "post-market review", "daily review", "how did we trade today", or "grade today's trades".
 ---
 
 # Trading review
 
 Run the after-close review of one trading day, as an experienced momentum trader auditing
-their own book. The output is a new dated section at the TOP of `trading_review.md` (a
+their own book. The output is a new dated section at the TOP of `docs/trading_review.md` (a
 living document, newest first) plus prioritized recommendations. You are reviewing both
 the system AND the decision layer's judgment — grade honestly, including your own passes.
 
@@ -37,7 +37,7 @@ whether a settings/code change landed before blaming the market.
 
 ## Step 2 — Score the previous review's watch-items
 
-Read the **newest** `## Review — ...` section of `trading_review.md` and its
+Read the **newest** `## Review — ...` section of `docs/trading_review.md` and its
 "Watch next session" list. Grade every item explicitly against today's digest:
 **met / not met / no data**, one line of evidence each. This is the feedback loop that
 tells us whether the last round of changes worked — never skip it.
@@ -67,7 +67,7 @@ perfectly good outcome.
 
 ## Step 5 — Write the review
 
-Prepend a section to `trading_review.md`, directly under the intro paragraph and above
+Prepend a section to `docs/trading_review.md`, directly under the intro paragraph and above
 the previous `## Review — ...` section (older reviews stay untouched):
 
 ```markdown

@@ -7,10 +7,15 @@ underlyings**, lets an LLM pick at most one entry, and trades **debit vertical
 spreads** as single multi-leg (MLEG) limit orders. Exits are purely mechanical.
 
 > [!TIP]
-> **Live dashboard**: [alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh](https://alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh)
-> — cycle journal, open positions with unrealized PnL, realized PnL per closed
-> spread, and trading config, refreshed on every
-> [`/paca-agent` run](#running-the-paca-agent) via `deploy.sh` and `pnl.py`.
+> **Live dashboards**, refreshed on every [`/paca-agent` run](#running-the-paca-agent):
+> - [alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh](https://alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh)
+>   — cycle journal, open positions with unrealized PnL, realized PnL per
+>   closed spread, and trading config.
+> - [alpaca-hackathon-2026-artifacts-paca-candles.surge.sh](https://alpaca-hackathon-2026-artifacts-paca-candles.surge.sh)
+>   — every spread's entry and exit drawn over 5m candles with the RSI/ATR/MACD
+>   signals, EMA 11/22, and the bars where entry events fired.
+>
+> How both pages are exported and deployed: [docs/DASHBOARDS.md](docs/DASHBOARDS.md).
 
 > **Full rewrite (2026-08-31).** The previous phased single-underlying package
 > (`src/regimepilot/`) was replaced with 7 flat modules. The old code lives in
@@ -68,7 +73,7 @@ All numbers below are the shipped `settings.yaml` defaults — change them there
 After the first live trading day the signal and spread-selection rules were
 revised (MACD magnitude threshold, RSI exhaustion gate, debit-fraction band) —
 the full review, evidence and rationale are in
-[trading_review.md](trading_review.md).
+[docs/trading_review.md](docs/trading_review.md).
 
 - **Whitelist** (`symbols` in settings.yaml): SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN,
   IBIT, MSTR, SLV, WMT, GLD, USO, XLE by default (index/tech core plus bitcoin, metals,
@@ -98,10 +103,10 @@ the full review, evidence and rationale are in
   leg spread ≤ 350 bps, implied volatility present; sanity
   `0.05 ≤ net debit < width`; the debit must sit in **25%–45% of the width**
   (long leg near ATM — no deep-OTM lottery tickets, no overpriced spreads;
-  see [trading_review.md](trading_review.md)); rank by **reward-to-risk**
+  see [docs/trading_review.md](docs/trading_review.md)); rank by **reward-to-risk**
   `(width − debit) / debit`, highest first (ties → tighter combined leg
   quotes). Full methodology and the alternatives considered:
-  [SPREAD_SELECTION.md](SPREAD_SELECTION.md).
+  [docs/SPREAD_SELECTION.md](docs/SPREAD_SELECTION.md).
 - **Risk (from live equity, every cycle)**: per entry ≤ 0.5% of equity, open
   premium per underlying ≤ 1.5%, new premium per cycle ≤ 1%, total open premium
   at risk ≤ 10%. Unknown equity or unknown open risk refuses entries.
@@ -227,10 +232,10 @@ this README after you pick. Example:
 ### Reviewing the day with `/trading-review`
 
 A third skill (`.claude/skills/trading-review/`) runs the after-close review that produced
-[trading_review.md](trading_review.md). It digests the day's cycle journal
+[docs/trading_review.md](docs/trading_review.md). It digests the day's cycle journal
 (`analyze.py`, read-only), pulls realized/open PnL from `pnl.py`, scores the previous
 review's "Watch next session" items, grades every entry and pass against what prices did
-afterwards, prepends a dated review section to `trading_review.md`, and finishes with
+afterwards, prepends a dated review section to `docs/trading_review.md`, and finishes with
 prioritized recommendations — applying only the ones you pick, and committing nothing.
 Run it after the close:
 
