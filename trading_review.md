@@ -42,10 +42,38 @@ a bare histogram sign flip does not. **Fix:** `macd_cross_*` now fires only
 when `|histogram| ≥ macd_min_hist_atr × ATR` (shipped 0.05). Reversal exits
 consume the same events, so whipsaw exits inherit the fix automatically.
 
-Calibration against 9/1 data (|hist|/ATR at the moment of cross): the good
-signals pass — TSLA +0.107 (0.16), AAPL +0.031 (0.054) — while every trade the
-human decider passed on as noise is now blocked mechanically: MSFT +0.0007
-(0.001), TSLA −0.0014 (0.002), SPY ±0.012–0.0135 (0.025–0.03).
+**What the formula means.** The MACD histogram is the MACD line minus its
+signal line, in dollars: positive = short-term momentum accelerating up,
+negative = down. A "cross" is the histogram changing sign. The old rule fired
+on *any* sign change, but a flip of ±0.001 just means momentum is hovering at
+exactly zero — in sideways chop the histogram wobbles across the line over and
+over (3–6×/day/symbol on 9/1), and each wobble was both an entry candidate and
+a reversal-exit trigger. The new rule demands the histogram *land* meaningfully
+far from zero: at least 5% (`macd_min_hist_atr`) of the symbol's ATR — the
+typical size of one bar's price movement, also in dollars.
+
+Scaling by ATR instead of a fixed dollar floor matters because the histogram's
+raw size depends on the stock's price and volatility: $0.02 is huge for a $60
+ETF like XLE and pure noise for $760 SPY. Dividing by ATR makes one threshold
+mean the same thing everywhere — *"momentum must have moved at least 5% of a
+typical bar's range past zero"* — and it adapts automatically when volatility
+changes. As with gap/breakout, the *previous* bar's ATR is used, so an event
+bar can't inflate its own yardstick.
+
+Calibration against 9/1 data (`|hist| / ATR` at the moment of cross):
+
+| Signal | hist | ATR | ratio | verdict |
+|---|---|---|---|---|
+| TSLA cross-up 15:13 (good trade, taken) | +0.107 | 0.67 | 0.16 | fires ✓ |
+| AAPL cross-up 15:04 (good trade, taken) | +0.031 | 0.58 | 0.054 | fires ✓ |
+| SPY cross-down 14:35 (passed as noise) | −0.0135 | 0.45 | 0.030 | blocked ✗ |
+| SPY cross-up 13:43 (whipsawed the puts) | +0.012 | 0.49 | 0.025 | blocked ✗ |
+| TSLA cross-down 14:11 (passed as noise) | −0.0014 | 0.65 | 0.002 | blocked ✗ |
+| MSFT cross-up 15:22 (pure noise) | +0.0007 | 0.55 | 0.001 | blocked ✗ |
+
+Every trade the human decider took passes the threshold; every cross it passed
+on as noise — including the one that whipsawed the SPY puts out at a loss — is
+now blocked mechanically.
 
 ### 2. RSI was computed but never used — exhaustion filtering lived in prompt text
 
