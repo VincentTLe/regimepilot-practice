@@ -11,12 +11,15 @@ TODAY = date(2026, 8, 31)
 
 
 @pytest.fixture(autouse=True)
-def pinned_risk_fractions(monkeypatch):
-    """Sizing tests assume these caps regardless of trader edits to settings.yaml."""
+def pinned_settings(monkeypatch):
+    """Sizing and exit tests assume these values regardless of trader edits to settings.yaml."""
     monkeypatch.setattr(settings, "PER_ENTRY_FRACTION", 0.005)
     monkeypatch.setattr(settings, "PER_UNDERLYING_FRACTION", 0.02)
     monkeypatch.setattr(settings, "PER_CYCLE_FRACTION", 0.01)
     monkeypatch.setattr(settings, "TOTAL_FRACTION", 0.10)
+    monkeypatch.setattr(settings, "STOP_FRACTION", 0.5)
+    monkeypatch.setattr(settings, "TAKE_PROFIT_MULT", 2.0)
+    monkeypatch.setattr(settings, "EXIT_DTE", 2)
 
 
 def leg(symbol="SPY260911C00650000", underlying="SPY", qty=1, price=3.0, strike=650.0, option_type="C"):
@@ -158,7 +161,7 @@ def test_exit_at_exact_stop_threshold():
 
 
 def test_exit_at_exact_take_profit_threshold():
-    # entry debit 2.00, TP at mark >= 4.00
+    # entry debit 2.00, TP at mark >= 4.00 (pinned 2.0x; settings.yaml may differ)
     decision = pos_and_risk.exit_decision(spread(), quote(4.9, 5.1), quote(0.9, 1.1), TODAY)
     assert decision is not None and decision.reason == "take_profit" and decision.net_mark == 4.0
 
