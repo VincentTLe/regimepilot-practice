@@ -11,16 +11,18 @@ exception type names only — response bodies are never copied into errors.
 from __future__ import annotations
 
 import json
+import time
 from typing import Callable
 
 import httpx
+from loguru import logger
 
 import settings
 from data_models import EntryChoice, SymbolFeatures
 
-OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-TIMEOUT_SECONDS = 60.0
-# Model choice lives in settings.yaml (llm section).
+# Endpoint, models, reasoning effort and timeouts live in settings.yaml (llm section).
+MAX_TOKENS = 1200  # reasoning tokens count against this on GLM-style models; the JSON reply itself is tiny
+TEMPERATURE = 0.2
 
 SYSTEM_PROMPT = """You are the entry-signal module of a paper-trading agent that buys
 debit vertical spreads on liquid US options. Every candidate underlying has fired
@@ -52,38 +54,83 @@ class LlmError(Exception):
     pass
 
 
-def call_openrouter(
+def _payload(model: str, messages: list[dict], json_mode: bool) -> dict:
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
+        "reasoning_effort": settings.LLM_REASONING_EFFORT,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def _parse_chat(response: httpx.Response, model: str) -> tuple[str, str] | None:
+    """(content, model_used) from an OpenAI-style chat reply; None on any unexpected shape.
+
+    An empty content (a reasoning-only reply, or a truncated one) is treated as
+    unexpected: the caller moves on to the next model rather than parsing air.
+    """
+    try:
+        body = response.json()
+        content = body["choices"][0]["message"]["content"]
+        model_used = body.get("model", model)
+        if not isinstance(content, str) or not content.strip() or not isinstance(model_used, str):
+            return None
+    except Exception:
+        return None
+    return content, model_used
+
+
+def call_llm(
     messages: list[dict],
     api_key: str,
     transport: httpx.BaseTransport | None = None,
 ) -> tuple[str, str]:
-    """POST to OpenRouter; returns (content, model_used). Raises LlmError."""
-    payload = {
-        "model": settings.PRIMARY_MODEL,
-        "models": [settings.PRIMARY_MODEL, *settings.FALLBACK_MODELS],
-        "messages": messages,
-        "response_format": {"type": "json_object"},
-    }
-    try:
-        with httpx.Client(timeout=TIMEOUT_SECONDS, transport=transport) as client:
-            response = client.post(
-                OPENROUTER_CHAT_URL,
-                json=payload,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-    except Exception as error:
-        raise LlmError(f"openrouter request failed: {type(error).__name__}") from None
-    if response.status_code != 200:
-        raise LlmError(f"openrouter returned HTTP {response.status_code}") from None
-    try:
-        body = response.json()
-        content = body["choices"][0]["message"]["content"]
-        model_used = body.get("model", settings.PRIMARY_MODEL)
-        if not isinstance(content, str) or not isinstance(model_used, str):
-            raise TypeError
-    except Exception:
-        raise LlmError("openrouter response had an unexpected shape") from None
-    return content, model_used
+    """POST to the OpenAI-compatible endpoint in settings.yaml (Featherless).
+
+    Tries the primary model, then every fallback in order — the fallback runs
+    client-side (no OpenRouter-style `models` array). A model that answers
+    HTTP 400 while json_mode is on is retried once without response_format.
+    Returns (content, model_used). Raises LlmError only when every model
+    failed; the message carries status codes / exception type names only.
+    """
+    url = f"{settings.LLM_BASE_URL}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    failures: list[str] = []
+    with httpx.Client(timeout=settings.LLM_TIMEOUT_SECONDS, transport=transport) as client:
+        for model in (settings.PRIMARY_MODEL, *settings.FALLBACK_MODELS):
+            json_mode = settings.LLM_JSON_MODE
+            while True:
+                try:
+                    response = client.post(url, json=_payload(model, messages, json_mode), headers=headers)
+                except Exception as error:
+                    failures.append(f"{model}: {type(error).__name__}")
+                    break
+                if response.status_code == 400 and json_mode:
+                    logger.warning("{}: HTTP 400 with json_mode, retrying without response_format", model)
+                    json_mode = False
+                    continue
+                if response.status_code != 200:
+                    failures.append(f"{model}: HTTP {response.status_code}")
+                    break
+                parsed = _parse_chat(response, model)
+                if parsed is None:
+                    failures.append(f"{model}: unexpected response shape")
+                    break
+                return parsed
+            logger.warning("LLM model failed, trying next: {}", failures[-1])
+    raise LlmError(f"{settings.LLM_PROVIDER}: every model failed ({'; '.join(failures)})")
+
+
+def ping(api_key: str, transport: httpx.BaseTransport | None = None) -> tuple[str, float]:
+    """One tiny round trip for preflight: (model that answered, seconds). Raises LlmError."""
+    messages = [{"role": "user", "content": 'Reply with JSON {"ok": true}'}]
+    started = time.perf_counter()
+    _, model_used = call_llm(messages, api_key, transport=transport)
+    return model_used, time.perf_counter() - started
 
 
 def _extract_json(text: str) -> dict | None:
@@ -152,7 +199,7 @@ def decide_entry(
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": json.dumps(briefing)},
     ]
-    content, model_used = call_openrouter(messages, api_key, transport=transport)
+    content, model_used = call_llm(messages, api_key, transport=transport)
     return parse_entry_choice(content, {c.symbol for c in tradeable}, model_used)
 
 

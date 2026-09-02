@@ -126,7 +126,7 @@ def test_positions_cli_json(monkeypatch):
         fake_position(SHORT, 1, 1.25, side="short", unrealized_pl=7.0, current_price=1.18),
     ])
     monkeypatch.setattr(pnl, "_bootstrap", lambda: (broker.load_config({
-        "ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "OPENROUTER_API_KEY": "o"}), trading))
+        "ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "FEATHERLESS_API_KEY": "o"}), trading))
     result = CliRunner().invoke(pnl.app, ["positions", "--json"])
     assert result.exit_code == 0, result.output
     rows = json.loads(result.stdout)

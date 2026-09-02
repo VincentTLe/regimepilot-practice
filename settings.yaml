@@ -54,6 +54,11 @@ exits:                       # mechanical, checked every cycle — the LLM is ne
   exit_dte: 2                # always exit at this many days to expiration or fewer
   reversal_exit: true        # close a spread when an entry event fires AGAINST it (e.g. gap_down while holding a call spread)
 
-llm:                         # OpenRouter models for the entry decision (skipped with --manual-mode)
-  primary_model: z-ai/glm-5.3-flash
-  fallback_models: [minimax/minimax-m3:free, nvidia/nemotron-3-super-120b-a12b:free]
+llm:                         # OpenAI-compatible chat endpoint for the entry decision (skipped with --manual-mode)
+  provider: featherless      # label only (logs, preflight); the key comes from FEATHERLESS_API_KEY in .env
+  base_url: https://api.featherless.ai/v1   # POSTs to <base_url>/chat/completions
+  primary_model: zai-org/GLM-5.3-Flash      # tried first every decision
+  fallback_models: [zai-org/GLM-5.3]        # tried in order when the primary fails (HTTP error, timeout, bad reply); then HOLD
+  reasoning_effort: low      # low | high | max — Featherless/GLM extra body param; low keeps a decision well under the cycle interval
+  timeout_seconds: 45        # per model attempt (5..120); worst case = attempts x this, must stay under loop_interval_seconds
+  json_mode: true            # send response_format json_object; on HTTP 400 the same model is retried once without it

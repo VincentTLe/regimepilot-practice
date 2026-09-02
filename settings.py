@@ -96,7 +96,9 @@ _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
 _RISK_KEYS = {"per_entry_fraction", "per_underlying_fraction", "per_cycle_fraction",
               "total_fraction", "allow_stacking"}
 _EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit"}
-_LLM_KEYS = {"primary_model", "fallback_models"}
+_LLM_KEYS = {"provider", "base_url", "primary_model", "fallback_models",
+             "reasoning_effort", "timeout_seconds", "json_mode"}
+_REASONING_EFFORTS = ("low", "high", "max")
 
 
 def validate(raw: object) -> dict[str, object]:
@@ -188,6 +190,14 @@ def validate(raw: object) -> dict[str, object]:
     values["REVERSAL_EXIT"] = exits["reversal_exit"]
 
     llm = _section(raw, "llm", _LLM_KEYS)
+    provider = llm["provider"]
+    if not isinstance(provider, str) or not provider.strip():
+        _fail("llm.provider", "must be a non-empty provider name", provider)
+    values["LLM_PROVIDER"] = provider.strip()
+    base_url = llm["base_url"]
+    if not isinstance(base_url, str) or not base_url.strip().startswith("http"):
+        _fail("llm.base_url", "must be an http(s) URL such as https://api.featherless.ai/v1", base_url)
+    values["LLM_BASE_URL"] = base_url.strip().rstrip("/")
     primary = llm["primary_model"]
     if not isinstance(primary, str) or not primary.strip():
         _fail("llm.primary_model", "must be a non-empty model name", primary)
@@ -196,6 +206,14 @@ def validate(raw: object) -> dict[str, object]:
     if not isinstance(fallbacks, list) or any(not isinstance(m, str) or not m.strip() for m in fallbacks):
         _fail("llm.fallback_models", "must be a list of model names (may be empty)", fallbacks)
     values["FALLBACK_MODELS"] = tuple(m.strip() for m in fallbacks)
+    effort = llm["reasoning_effort"]
+    if not isinstance(effort, str) or effort.strip().lower() not in _REASONING_EFFORTS:
+        _fail("llm.reasoning_effort", f"must be one of {list(_REASONING_EFFORTS)}", effort)
+    values["LLM_REASONING_EFFORT"] = effort.strip().lower()
+    values["LLM_TIMEOUT_SECONDS"] = _number(llm, "llm", "timeout_seconds", 5, 120)
+    if not isinstance(llm["json_mode"], bool):
+        _fail("llm.json_mode", "must be true or false", llm["json_mode"])
+    values["LLM_JSON_MODE"] = llm["json_mode"]
 
     return values
 
@@ -255,5 +273,10 @@ STOP_FRACTION: float = _VALUES["STOP_FRACTION"]  # type: ignore[assignment]
 TAKE_PROFIT_MULT: float = _VALUES["TAKE_PROFIT_MULT"]  # type: ignore[assignment]
 EXIT_DTE: int = _VALUES["EXIT_DTE"]  # type: ignore[assignment]
 REVERSAL_EXIT: bool = _VALUES["REVERSAL_EXIT"]  # type: ignore[assignment]
+LLM_PROVIDER: str = _VALUES["LLM_PROVIDER"]  # type: ignore[assignment]
+LLM_BASE_URL: str = _VALUES["LLM_BASE_URL"]  # type: ignore[assignment]
 PRIMARY_MODEL: str = _VALUES["PRIMARY_MODEL"]  # type: ignore[assignment]
 FALLBACK_MODELS: tuple[str, ...] = _VALUES["FALLBACK_MODELS"]  # type: ignore[assignment]
+LLM_REASONING_EFFORT: str = _VALUES["LLM_REASONING_EFFORT"]  # type: ignore[assignment]
+LLM_TIMEOUT_SECONDS: float = _VALUES["LLM_TIMEOUT_SECONDS"]  # type: ignore[assignment]
+LLM_JSON_MODE: bool = _VALUES["LLM_JSON_MODE"]  # type: ignore[assignment]

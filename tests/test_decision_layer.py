@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 import decision_layer
+import settings
 from data_models import Event, SymbolFeatures
 
 
@@ -49,24 +50,91 @@ def test_parse_entry_choice_accepts_valid_and_fenced():
     assert decision_layer.parse_entry_choice(fenced, {"SPY"}, "m") is not None
 
 
-# --- transport-level hardening ---
+# --- transport-level hardening (Featherless, OpenAI-compatible) ---
 
-def test_call_openrouter_happy_path():
-    transport = transport_returning(200, chat_body('{"action":"pass"}', model="fallback-x"))
-    content, model = decision_layer.call_openrouter([], "key", transport=transport)
-    assert content == '{"action":"pass"}' and model == "fallback-x"
+@pytest.fixture(autouse=True)
+def llm_settings(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "https://llm.test/v1")
+    monkeypatch.setattr(settings, "PRIMARY_MODEL", "m-primary")
+    monkeypatch.setattr(settings, "FALLBACK_MODELS", ("m-fallback",))
+    monkeypatch.setattr(settings, "LLM_REASONING_EFFORT", "low")
+    monkeypatch.setattr(settings, "LLM_JSON_MODE", True)
+    monkeypatch.setattr(settings, "LLM_TIMEOUT_SECONDS", 5.0)
 
 
-def test_call_openrouter_http_error_names_status_only():
+def recording_transport(responder):
+    """responder(model, body) -> httpx.Response; records every request."""
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append({"url": str(request.url), "body": body})
+        return responder(body.get("model"), body)
+
+    return seen, httpx.MockTransport(handler)
+
+
+def test_call_llm_happy_path():
+    transport = transport_returning(200, chat_body('{"action":"pass"}', model="m-primary"))
+    content, model = decision_layer.call_llm([], "key", transport=transport)
+    assert content == '{"action":"pass"}' and model == "m-primary"
+
+
+def test_call_llm_posts_openai_shape_to_base_url():
+    seen, transport = recording_transport(lambda m, b: httpx.Response(200, json=chat_body("{}", m)))
+    decision_layer.call_llm([{"role": "user", "content": "hi"}], "key", transport=transport)
+    assert len(seen) == 1
+    assert seen[0]["url"] == "https://llm.test/v1/chat/completions"
+    body = seen[0]["body"]
+    assert body["model"] == "m-primary"
+    assert "models" not in body  # OpenRouter-only field must be gone
+    assert body["reasoning_effort"] == "low"
+    assert body["response_format"] == {"type": "json_object"}
+
+
+def test_call_llm_falls_back_to_next_model_on_http_error():
+    def responder(model, body):
+        if model == "m-primary":
+            return httpx.Response(500)
+        return httpx.Response(200, json=chat_body('{"action":"pass"}', model))
+
+    seen, transport = recording_transport(responder)
+    content, model = decision_layer.call_llm([], "key", transport=transport)
+    assert model == "m-fallback"
+    assert [s["body"]["model"] for s in seen] == ["m-primary", "m-fallback"]
+
+
+def test_call_llm_retries_same_model_without_json_mode_on_400():
+    def responder(model, body):
+        if "response_format" in body:
+            return httpx.Response(400)
+        return httpx.Response(200, json=chat_body('{"action":"pass"}', model))
+
+    seen, transport = recording_transport(responder)
+    content, model = decision_layer.call_llm([], "key", transport=transport)
+    assert model == "m-primary"
+    assert len(seen) == 2
+    assert "response_format" in seen[0]["body"] and "response_format" not in seen[1]["body"]
+
+
+def test_call_llm_all_models_fail_names_status_only():
     with pytest.raises(decision_layer.LlmError) as excinfo:
-        decision_layer.call_openrouter([], "key", transport=transport_returning(429))
+        decision_layer.call_llm([], "key", transport=transport_returning(429))
     assert "429" in str(excinfo.value)
     assert "key" not in str(excinfo.value)
 
 
-def test_call_openrouter_bad_shape():
+def test_call_llm_bad_shape_or_empty_content_exhausts_models():
     with pytest.raises(decision_layer.LlmError):
-        decision_layer.call_openrouter([], "key", transport=transport_returning(200, {"choices": []}))
+        decision_layer.call_llm([], "key", transport=transport_returning(200, {"choices": []}))
+    with pytest.raises(decision_layer.LlmError):
+        decision_layer.call_llm([], "key", transport=transport_returning(200, chat_body("")))
+
+
+def test_ping_reports_model_and_latency():
+    transport = transport_returning(200, chat_body('{"ok": true}', model="m-primary"))
+    model, seconds = decision_layer.ping("key", transport=transport)
+    assert model == "m-primary" and seconds >= 0.0
 
 
 def test_decide_entry_end_to_end():

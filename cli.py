@@ -421,12 +421,12 @@ def _decide(
     if manual_mode:
         choice = decision_layer.manual_decide(tradeable)
     else:
-        if not config.openrouter_api_key:
-            logger.error("OPENROUTER_API_KEY missing; use --manual-mode or set the key")
+        if not config.llm_api_key:
+            logger.error("FEATHERLESS_API_KEY missing; use --manual-mode or set the key")
             return None
         try:
             choice = decision_layer.decide_entry(
-                tradeable, config.openrouter_api_key, transport=llm_transport
+                tradeable, config.llm_api_key, transport=llm_transport
             )
         except decision_layer.LlmError as error:
             logger.error("LLM decision failed, holding: {}", error)
@@ -734,6 +734,16 @@ def preflight() -> None:
     typer.echo(
         f"OK   Alpaca connectivity — market {state}, server time {clock.server_time}"
     )
+
+    if not config.llm_api_key:
+        typer.echo("WARN LLM key missing (FEATHERLESS_API_KEY): only --manual-mode can decide entries")
+    else:
+        try:
+            model, seconds = decision_layer.ping(config.llm_api_key)
+        except decision_layer.LlmError as error:
+            typer.echo(f"FAIL LLM ({settings.LLM_PROVIDER}): {error}")
+            raise typer.Exit(1)
+        typer.echo(f"OK   LLM {settings.LLM_PROVIDER} — {model} answered in {seconds:.1f}s")
     typer.echo("preflight passed")
 
 

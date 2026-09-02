@@ -99,14 +99,14 @@ def load_config(env: dict[str, str] | None = None) -> Config:
     secret_key = env.get("ALPACA_SECRET_KEY", "").strip()
     if not api_key or not secret_key:
         raise ConfigError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
-    openrouter = env.get("OPENROUTER_API_KEY", "").strip() or None
+    llm_key = env.get("FEATHERLESS_API_KEY", "").strip() or None
     return Config(
         api_key=api_key,
         secret_key=secret_key,
         symbols=settings.SYMBOLS,
         bar_timeframe=settings.BAR_TIMEFRAME,
         bar_seconds=settings.BAR_SECONDS,
-        openrouter_api_key=openrouter,
+        llm_api_key=llm_key,
     )
 
 

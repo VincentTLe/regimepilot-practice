@@ -55,6 +55,10 @@ def broken(mutate) -> dict:
         (lambda r: r.update(symbols=[]), "symbols"),
         (lambda r: r.update(symbols="SPY"), "symbols"),  # string, not a list
         (lambda r: r["llm"].update(primary_model=""), "llm.primary_model"),
+        (lambda r: r["llm"].update(base_url=""), "llm.base_url"),
+        (lambda r: r["llm"].update(reasoning_effort="ultra"), "llm.reasoning_effort"),
+        (lambda r: r["llm"].update(timeout_seconds=1), "llm.timeout_seconds"),
+        (lambda r: r["llm"].update(json_mode=1), "llm.json_mode"),  # must be a bool
         (lambda r: r["exits"].update(reversal_exit=1), "exits.reversal_exit"),  # must be a bool
         (lambda r: r["risk"].update(allow_stacking=1), "risk.allow_stacking"),  # must be a bool
         (lambda r: r["signals"].update(macd_min_hist_atr=1.5), "signals.macd_min_hist_atr"),
