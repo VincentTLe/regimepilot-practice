@@ -24,3 +24,8 @@ surge_artifacts/paca-cycles/*
 !surge_artifacts/paca-cycles/index.html
 !surge_artifacts/paca-cycles/deploy.sh
 !surge_artifacts/paca-cycles/CNAME
+!surge_artifacts/paca-candles/
+surge_artifacts/paca-candles/*
+!surge_artifacts/paca-candles/index.html
+!surge_artifacts/paca-candles/deploy.sh
+!surge_artifacts/paca-candles/CNAME

@@ -71,6 +71,8 @@ The candidate list is recomputed inside the run, so the index can drift if a gat
 ```bash
 sh surge_artifacts/paca-cycles/deploy.sh
 curl -sI https://alpaca-hackathon-2026-artifacts-paca-cycles.surge.sh | head -1   # expect HTTP 200
+sh surge_artifacts/paca-candles/deploy.sh
+curl -sI https://alpaca-hackathon-2026-artifacts-paca-candles.surge.sh | head -1  # expect HTTP 200
 ```
 
 Run this even when the market was closed or you passed — the dashboard should always reflect the latest cycle.
