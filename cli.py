@@ -27,6 +27,7 @@ import decision_layer
 import market_data
 import options_screener
 import pos_and_risk
+import scanner
 import settings
 import signals
 import sounds
@@ -150,6 +151,7 @@ def run_cycle(
     manual_mode: bool,
     llm_transport: object | None = None,
     flow_state: dict[str, tape.TapeState] | None = None,
+    scanner_client: object | None = None,
 ) -> dict:
     """One full cycle. Returns the journal record (also appended to the journal).
 
@@ -203,10 +205,28 @@ def run_cycle(
     eod = in_flatten_window(clock)
     record["eod_window"] = eod
 
+    # --- Universe: the static whitelist plus the market-wide "in play" scan. A
+    # scanner failure is logged and the cycle runs on the static list alone.
+    scanned: list[str] = []
+    if scanner_client is not None and not eod:
+        try:
+            found = scanner_client.in_play(exclude=config.symbols)
+            scanned = [r.symbol for r in found]
+            record["scanned"] = [
+                {"symbol": r.symbol, "change_pct": round(r.change_pct, 1), "range_pct": round(r.range_pct, 1),
+                 "price": round(r.price, 2), "trades": r.trades}
+                for r in found
+            ]
+            logger.info("scanner: {}", ", ".join(
+                f"{r.symbol} {r.change_pct:+.1f}% range {r.range_pct:.1f}%" for r in found) or "nothing in play")
+        except Exception as error:  # noqa: BLE001 - never let the scan stop the static list
+            logger.warning("scanner failed, static list only: {}", type(error).__name__)
+    universe = tuple(dict.fromkeys(config.symbols + tuple(scanned)))
+
     # --- Trading signals: needed by the reversal exit AND the entry side, so they
-    # cover the whitelist plus every held underlying (even one removed from the list)
+    # cover the universe plus every held underlying (even one removed from the list)
     watch_symbols = tuple(
-        dict.fromkeys(config.symbols + tuple(s.underlying for s in spreads))
+        dict.fromkeys(universe + tuple(s.underlying for s in spreads))
     )
     try:
         quotes = broker.fetch_spot_quotes(stock_data, watch_symbols)
@@ -356,7 +376,7 @@ def run_cycle(
         return record
 
     # --- Entry candidates: whitelist symbols only ---
-    whitelist_features = {symbol: features[symbol] for symbol in config.symbols}
+    whitelist_features = {symbol: features[symbol] for symbol in universe if symbol in features}
     pending = {
         pos_and_risk.parse_occ(sym)[0]
         for sym in account.open_order_symbols
@@ -861,6 +881,13 @@ def run(
     # Tape memory lives in the loop process; a single-shot run has no previous
     # cycle to confirm against, so it keeps the event-only reversal rule.
     flow_state: dict[str, tape.TapeState] | None = {} if loop else None
+    scanner_client = None
+    if settings.SCANNER_ENABLED:
+        scanner_client = scanner.Scanner.build(config.api_key, config.secret_key, trading)
+        logger.info(
+            "scanner on: up to {} in-play names per cycle (price >= {}, prints >= {}, move >= {}%)",
+            settings.SCANNER_TOP, settings.SCANNER_MIN_PRICE, settings.SCANNER_MIN_TRADES, settings.SCANNER_MIN_MOVE_PCT,
+        )
     try:
         while True:
             cycle_started = time.monotonic()
@@ -872,6 +899,7 @@ def run(
                 execute=execute,
                 manual_mode=manual_mode,
                 flow_state=flow_state,
+                scanner_client=scanner_client,
             )
             logger.info("cycle {} outcome: {}", record["cycle_id"], record.get("outcome"))
             new = _new_orders(record)

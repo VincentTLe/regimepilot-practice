@@ -18,8 +18,8 @@ signals:                     # technical analysis + entry events
   macd_signal: 9             # EMA length of the MACD signal line
   atr_event_mult: 2.0        # gap/breakout events fire only above this many ATRs (higher = rarer, stronger)
   macd_min_hist_atr: 0.05    # MACD cross fires only when |histogram| >= this many ATRs (0 = any sign flip)
-  rsi_overbought: 70         # entries only: drop CALL events at/above this RSI (exhausted up-move)
-  rsi_oversold: 30           # entries only: drop PUT events at/below this RSI (exhausted down-move)
+  rsi_overbought: 80         # entries only: drop CALL events at/above this RSI (exhausted up-move). 70 blocked every gap-open entry on 2026-09-03: the gap bar itself pins the 5m RSI at 75-90
+  rsi_oversold: 20           # entries only: drop PUT events at/below this RSI (exhausted down-move)
   trend_ema_fast: 25         # advisory trend anchor, bars (~2h on 5m): journaled + shown to the decider, NOT a gate
   trend_ema_slow: 50         # advisory trend anchor, bars (~4h on 5m): journaled + shown to the decider, NOT a gate
   flow_lookback_minutes: 15  # tape sensor: minutes of IEX trade prints behind flow_imbalance (tick rule)
@@ -28,6 +28,13 @@ signals:                     # technical analysis + entry events
   flow_exit_bars: 2          # reversal exit also needs flow against the spread on this many consecutive cycles
   stale_bar_factor: 2.0      # block entries when the last bar is older than this many bar durations
   min_bars: 40               # completed bars required before indicators count (>= macd_slow + macd_signal)
+
+scanner:                     # market-wide "in play" names added to the universe every cycle, next to `symbols`
+  enabled: true              # false = static whitelist only (dev/paca behaviour)
+  top: 6                     # at most this many scanned names per cycle
+  min_price: 10              # skip penny names: their option chains are junk
+  min_trades: 2000           # IEX prints so far today at least this many (the tape needs prints)
+  min_move_pct: 3.0          # today's |change| or high-low range at least this % of yesterday's close
 
 screener:                    # which vertical spreads are even considered
   min_dte: 5                 # nearest expiry must be at least this many days out

@@ -83,7 +83,8 @@ def _string_list(value: object, path: str) -> tuple[str, ...]:
 
 
 _TOP_KEYS = {"symbols", "bar_timeframe", "loop_interval_seconds",
-             "signals", "screener", "risk", "exits", "llm"}
+             "signals", "scanner", "screener", "risk", "exits", "llm"}
+_SCANNER_KEYS = {"enabled", "top", "min_price", "min_trades", "min_move_pct"}
 _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_signal",
                 "atr_event_mult", "stale_bar_factor", "min_bars",
                 "macd_min_hist_atr", "rsi_overbought", "rsi_oversold",
@@ -186,6 +187,15 @@ def validate(raw: object) -> dict[str, object]:
     if not isinstance(risk["allow_stacking"], bool):
         _fail("risk.allow_stacking", "must be true or false", risk["allow_stacking"])
     values["ALLOW_STACKING"] = risk["allow_stacking"]
+
+    scanner = _section(raw, "scanner", _SCANNER_KEYS)
+    if not isinstance(scanner["enabled"], bool):
+        _fail("scanner.enabled", "must be true or false", scanner["enabled"])
+    values["SCANNER_ENABLED"] = scanner["enabled"]
+    values["SCANNER_TOP"] = _integer(scanner, "scanner", "top", 0)
+    values["SCANNER_MIN_PRICE"] = _number(scanner, "scanner", "min_price", 0)
+    values["SCANNER_MIN_TRADES"] = _integer(scanner, "scanner", "min_trades", 0)
+    values["SCANNER_MIN_MOVE_PCT"] = _number(scanner, "scanner", "min_move_pct", 0)
 
     exits = _section(raw, "exits", _EXIT_KEYS)
     values["STOP_FRACTION"] = _number(exits, "exits", "stop_fraction", 0, 1, lo_open=True, hi_open=True)
@@ -292,6 +302,11 @@ STOP_FRACTION: float = _VALUES["STOP_FRACTION"]  # type: ignore[assignment]
 TAKE_PROFIT_MULT: float = _VALUES["TAKE_PROFIT_MULT"]  # type: ignore[assignment]
 EXIT_DTE: int = _VALUES["EXIT_DTE"]  # type: ignore[assignment]
 FLATTEN_MINUTES_BEFORE_CLOSE: int = _VALUES["FLATTEN_MINUTES_BEFORE_CLOSE"]  # type: ignore[assignment]
+SCANNER_ENABLED: bool = _VALUES["SCANNER_ENABLED"]  # type: ignore[assignment]
+SCANNER_TOP: int = _VALUES["SCANNER_TOP"]  # type: ignore[assignment]
+SCANNER_MIN_PRICE: float = _VALUES["SCANNER_MIN_PRICE"]  # type: ignore[assignment]
+SCANNER_MIN_TRADES: int = _VALUES["SCANNER_MIN_TRADES"]  # type: ignore[assignment]
+SCANNER_MIN_MOVE_PCT: float = _VALUES["SCANNER_MIN_MOVE_PCT"]  # type: ignore[assignment]
 REVERSAL_EXIT: bool = _VALUES["REVERSAL_EXIT"]  # type: ignore[assignment]
 REVERSAL_NEEDS_FLOW: bool = _VALUES["REVERSAL_NEEDS_FLOW"]  # type: ignore[assignment]
 TRAIL_ARM_MULT: float = _VALUES["TRAIL_ARM_MULT"]  # type: ignore[assignment]

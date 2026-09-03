@@ -958,3 +958,38 @@ def test_end_of_day_window_flattens_and_blocks_entries(monkeypatch):
         FakeOptionDataClient(marks), execute=False, manual_mode=True,
     )
     assert record["eod_window"] is False and record["exits"] == [] and "candidates" in record
+
+
+class _FakeScanner:
+    def __init__(self, rows=None, error=None):
+        self.rows, self.error, self.excluded = rows or [], error, None
+
+    def in_play(self, exclude=()):
+        self.excluded = tuple(exclude)
+        if self.error:
+            raise self.error
+        return self.rows
+
+
+def test_scanned_names_join_the_universe_and_a_scanner_failure_is_harmless():
+    import scanner as scanner_module
+
+    snow = scanner_module.InPlay(symbol="SNOW", change_pct=21.6, range_pct=9.8, price=372.0, trades=8686, volume=5e5)
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars(), "SNOW": breakout_bars()},
+        quotes_by_symbol={"SPY": (649.9, 650.1), "SNOW": (371.9, 372.1)},
+    )
+    fake = _FakeScanner(rows=[snow])
+    record = cli.run_cycle(
+        make_config(), FakeTradingClient(), stock, FakeOptionDataClient({}), execute=False, manual_mode=True,
+        scanner_client=fake,
+    )
+    assert fake.excluded == ("SPY",)
+    assert record["scanned"] == [{"symbol": "SNOW", "change_pct": 21.6, "range_pct": 9.8, "price": 372.0, "trades": 8686}]
+    assert sorted(c["symbol"] for c in record["candidates"]) == ["SNOW", "SPY"]
+    broken = cli.run_cycle(
+        make_config(), FakeTradingClient(), stock, FakeOptionDataClient({}), execute=False, manual_mode=True,
+        scanner_client=_FakeScanner(error=RuntimeError("screener down")),
+    )
+    assert "scanned" not in broken and [c["symbol"] for c in broken["candidates"]] == ["SPY"]
+    assert broken["outcome"] != "error"

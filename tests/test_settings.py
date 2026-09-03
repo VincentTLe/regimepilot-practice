@@ -78,6 +78,9 @@ def broken(mutate) -> dict:
         (lambda r: r["exits"].update(trail_arm_mult=0.5), "exits.trail_arm_mult"),  # 0 (off) or >= 1
         (lambda r: r["exits"].update(trail_giveback=1.5), "exits.trail_giveback"),
         (lambda r: r["exits"].update(flatten_minutes_before_close=-1), "exits.flatten_minutes_before_close"),
+        (lambda r: r["scanner"].update(top=-1), "scanner.top"),
+        (lambda r: r["scanner"].update(enabled="yes"), "scanner.enabled"),
+        (lambda r: r.pop("scanner"), "scanner"),
     ],
 )
 def test_validate_rejects_and_names_the_key(mutate, expect_in_message):

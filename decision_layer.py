@@ -41,11 +41,14 @@ trend EMA (positive = above the anchor, an up-regime; negative = below).
 Your job is to ENTER the single strongest candidate. Rank by: (1) event
 quality - a gap or breakout beats a bare macd_cross; (2) tape conviction -
 larger |flow_imbalance| on more prints; (3) trend alignment - the EMA distances
-carrying the sign of the trade; (4) room to run - RSI not near 70 for a CALL or
-30 for a PUT. Pass ONLY for a concrete reason you state in the thesis: fewer
-than about 100 prints behind the flow, the event runs against BOTH EMA
-anchors, RSI within 5 points of exhaustion in the trade direction, or a "held"
-position the candidate would contradict. Do not pass merely because conviction
+carrying the sign of the trade; (4) room to run - RSI not near the exhaustion
+levels given in the briefing (rsi_overbought for a CALL, rsi_oversold for a
+PUT). Pass ONLY for a concrete reason you state in the thesis: fewer than
+about 100 prints behind the flow, the event runs against BOTH EMA anchors, RSI
+within 5 points of the exhaustion level in the trade direction, or a "held"
+position the candidate would contradict. A candidate flagged in_play is a
+market-wide scan hit (abnormal range and participation today): momentum there
+is the point, do not pass on it merely for a stretched RSI. Do not pass merely because conviction
 is moderate: the risk manager sizes every trade and mechanical stops cut it.
 
 A candidate whose "held" field is set already has an open spread in that
@@ -200,9 +203,12 @@ def decide_entry(
     if not tradeable:
         return None
     briefing = {
+        "rsi_overbought": settings.RSI_OVERBOUGHT,
+        "rsi_oversold": settings.RSI_OVERSOLD,
         "candidates": [
             {
                 "symbol": c.symbol,
+                "in_play": c.symbol not in settings.SYMBOLS,
                 "spot": c.mid,
                 "events": [{"kind": e.kind, "direction": e.direction} for e in c.events],
                 "rsi": c.rsi,
@@ -222,7 +228,13 @@ def decide_entry(
         {"role": "user", "content": json.dumps(briefing)},
     ]
     content, model_used = call_llm(messages, api_key, transport=transport)
-    return parse_entry_choice(content, {c.symbol for c in tradeable}, model_used)
+    choice = parse_entry_choice(content, {c.symbol for c in tradeable}, model_used)
+    if choice is None:
+        # A pass (or garbage) is a hold either way; keep the stated reason in the log
+        # so a quiet day can be audited without re-running the model.
+        data = _extract_json(content) or {}
+        logger.info("decider passed ({}): {}", model_used, str(data.get("thesis", ""))[:200] or "no parseable thesis")
+    return choice
 
 
 def manual_decide(
