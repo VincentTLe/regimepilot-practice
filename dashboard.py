@@ -57,7 +57,8 @@ def _run(args: list[str], timeout: int = STEP_TIMEOUT) -> str:
     """
     try:
         completed = subprocess.run(
-            args, cwd=ROOT, capture_output=True, text=True, timeout=timeout, check=False
+            args, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, check=False,  # never let a tool's colour codes raise a decode error
         )
     except Exception as error:
         raise DashboardError(f"{Path(args[0]).name} failed: {type(error).__name__}") from None
@@ -180,9 +181,22 @@ def export_candles(root: Path = ROOT, days: int = 20) -> str:
     return "ok"
 
 
+def surge_binary() -> str | None:
+    """`surge` on PATH, or the per-user npm install (%APPDATA%\npm) that Anaconda's npm hides."""
+    found = shutil.which("surge")
+    if found:
+        return found
+    appdata = os.environ.get("APPDATA", "")
+    for name in ("surge.cmd", "surge"):
+        candidate = Path(appdata) / "npm" / name
+        if appdata and candidate.exists():
+            return str(candidate)
+    return None
+
+
 def deploy(root: Path = ROOT) -> str:
     """Push both pages to the surge domains in SURGE_DOMAIN_CYCLES / SURGE_DOMAIN_CANDLES."""
-    surge = shutil.which("surge")
+    surge = surge_binary()
     if surge is None:
         return "skipped: surge not installed"
     done = []
