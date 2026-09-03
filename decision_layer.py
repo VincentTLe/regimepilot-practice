@@ -27,8 +27,8 @@ TEMPERATURE = 0.2
 SYSTEM_PROMPT = """You are the entry-signal module of a paper-trading agent that buys
 debit vertical spreads on liquid US options. Every candidate has ALREADY passed
 deterministic gates: a momentum event on its latest completed 5-minute bar
-  gap_up / gap_down           - bar opened more than 2 ATR away from the prior close
-  breakout_up / breakout_down - bar body (close minus open) exceeded 2 ATR
+  gap_up / gap_down           - bar opened more than atr_event_mult ATR away from the prior close
+  breakout_up / breakout_down - bar body (close minus open) exceeded atr_event_mult ATR
   macd_cross_up / macd_cross_down - MACD histogram crossed zero by at least 0.05 ATR
 an RSI exhaustion filter, and a tape check: flow_imbalance is the tick-rule buy
 volume minus sell volume over their sum for the last minutes of prints (-1 =
@@ -203,6 +203,7 @@ def decide_entry(
     if not tradeable:
         return None
     briefing = {
+        "atr_event_mult": settings.ATR_EVENT_MULT,
         "rsi_overbought": settings.RSI_OVERBOUGHT,
         "rsi_oversold": settings.RSI_OVERSOLD,
         "candidates": [

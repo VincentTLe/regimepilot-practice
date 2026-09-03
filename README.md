@@ -341,6 +341,20 @@ USO left the whitelist: too few IEX prints for a reliable tape reading.
 gap ran against tape-agree positions by 0.5 / 1.4 ATR on the two halves — more
 than the intraday edge — so the day's result is banked before the close.
 
+**2b. Market-wide "in play" scanner.** The static whitelist is only the floor.
+Every cycle `scanner.py` asks Alpaca's screener for the most active names (by
+volume and by trade count) and the top gainers and losers, keeps the ones that
+are tradable with listed options (`has_options` asset attribute), reads one
+snapshot batch, and ranks by today's range plus |change|; the top `scanner.top`
+names above `min_price`, with at least `min_trades` IEX prints and a
+`min_move_pct` move join the universe for that cycle (journaled under
+`scanned`). They go through the same bars → events → RSI → tape gates, the same
+decider, screener, sizing and exits; a held scanned name keeps being managed
+after it drops out of the scan. A scanner failure logs and the cycle runs the
+static list. Penny names are excluded on purpose: their option chains never pass
+the screener. Added 2026-09-03 after a session where the 11-name list sat
+through MSFT +4%, TSLA +4.5% and SNOW +21% with nothing to do.
+
 **3. Continuous loop with a live dashboard.**
 
 ```bash
