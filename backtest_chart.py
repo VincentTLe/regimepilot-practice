@@ -103,13 +103,14 @@ h1{font-size:1.5rem;margin:0 0 6px}h2{font-size:1.02rem;margin:22px 0 4px;color:
 table{border-collapse:collapse;font-size:.9rem;margin:10px 0 18px}th,td{border-bottom:1px solid var(--line);padding:6px 10px;text-align:left}th{color:var(--muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}
 .meta{color:var(--muted);font-size:.9rem;margin:2px 0}.thesis{font-style:italic;margin:4px 0 8px;color:#C9D3DC}
 section{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:10px 14px;margin-top:14px}
-b{color:#fff}</style>"""
+b{color:#fff}a{color:var(--accent)}</style>"""
     return (
         "<!doctype html><html><head><meta charset=utf-8><title>PACA backtest: LLM picks on candles</title>"
         '<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>' + style + "</head><body>"
         "<h1>PACA tape/paca — the decider's backtest picks on 5-minute candles</h1>"
         "<p class=meta>Replay of the live entry gates and the real Featherless GLM decider on past sessions (IEX bars and prints). "
-        "Entry triangle = the bar the LLM chose; × = exit under stop 1 ATR / trail 1 ATR on closes; options P&amp;L is not modelled.</p>"
+        "Entry triangle = the bar the LLM chose; × = exit under stop 1 ATR / trail 1 ATR on closes; options P&amp;L is not modelled. "
+        '<a href="walkforward.html">Walk-forward check: every cut in-sample vs out-of-sample</a>.</p>'
         + summary + "".join(blocks) + "</body></html>"
     )
 

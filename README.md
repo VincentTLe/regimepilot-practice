@@ -367,3 +367,24 @@ data on this account); the `$ proxy` column assumes delta 0.4 and $12 friction.
 ```bash
 uv run --env-file .env backtest_tape.py --days 5            # -> logs/backtest_tape.csv + summary
 ```
+
+**6. Walk-forward check (the anti-overfit step).** `backtest_walkforward.py`
+splits a `backtest_tape.py` CSV into the first 60 sessions (in-sample) and the
+rest (out-of-sample) and prints every cut per half — tape status, event class,
+ET hour, symbol, exit rules, a tape-threshold sweep and a portfolio replay with
+the live caps — so a rule only counts when it holds on BOTH halves. On the
+90-session CSV (Apr 27 – Sep 2, 2026) the shipped settings are the ones that
+do: tape-agree beats tape-disagree to the close on both halves (+0.26 / +0.52
+ATR vs −0.06 / −0.33), hold-to-close beats every stop/trail set on both, a gap
+or breakout beats a bare MACD cross but the cross stays positive, and
+`flow_min_imbalance 0.15` / `flow_min_trades 50` sit in the robust middle of
+the sweep. Symbol-level results flip between halves (GLD, TSLA, WMT), so the
+whitelist is not tuned per name; 11:00 ET entries fade by the close on both
+halves but the sample is small (deferred). The replay with the live caps makes
+~3.7 entries a day, +0.9 / +1.9 ATR a day, positive on 60% / 63% of days —
+after option friction that is roughly breakeven, so any single day is mostly
+variance. Published next to the picks page as `walkforward.html`.
+
+```bash
+uv run --env-file .env backtest_walkforward.py --deploy      # -> surge_artifacts/paca-backtest/walkforward.html
+```
