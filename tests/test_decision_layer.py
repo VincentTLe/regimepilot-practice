@@ -248,3 +248,15 @@ def test_call_llm_reads_reasoning_when_content_is_empty():
         "content": "", "reasoning": 'ok {"action": "enter", "symbol": "SPY", "direction": "CALL", "thesis": "t"}'}}]}
     content, _ = decision_layer.call_llm([], "key", transport=transport_returning(200, entered))
     assert decision_layer.parse_entry_choice(content, {"SPY"}, "m").symbol == "SPY"
+
+
+def test_decide_entry_reports_a_pass_with_its_thesis():
+    seen = []
+    body = chat_body(json.dumps({"action": "pass", "thesis": "flow too thin"}))
+    choice = decision_layer.decide_entry(
+        [candidate("SPY")], "key", transport=transport_returning(200, body), on_pass=lambda m, t: seen.append((m, t))
+    )
+    assert choice is None and seen == [("test-model", "flow too thin")]
+    garbage = chat_body("not json at all")
+    decision_layer.decide_entry([candidate("SPY")], "key", transport=transport_returning(200, garbage), on_pass=lambda m, t: seen.append((m, t)))
+    assert seen[-1] == ("test-model", "no parseable thesis")

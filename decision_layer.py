@@ -200,8 +200,13 @@ def decide_entry(
     candidates: list[SymbolFeatures],
     api_key: str,
     transport: httpx.BaseTransport | None = None,
+    on_pass: Callable[[str, str], None] | None = None,
 ) -> EntryChoice | None:
-    """Ask the LLM to pick at most one entry from the gate-passing candidates (one call = one pick)."""
+    """Ask the LLM to pick at most one entry from the gate-passing candidates (one call = one pick).
+
+    `on_pass(model, thesis)` is called when the model declines (or answers
+    garbage): the caller journals the stated reason so passes can be graded
+    against later prices like entries are."""
     tradeable = [c for c in candidates if c.gate_block is None]
     if not tradeable:
         return None
@@ -237,7 +242,10 @@ def decide_entry(
         # A pass (or garbage) is a hold either way; keep the stated reason in the log
         # so a quiet day can be audited without re-running the model.
         data = _extract_json(content) or {}
-        logger.info("decider passed ({}): {}", model_used, str(data.get("thesis", ""))[:200] or "no parseable thesis")
+        thesis = str(data.get("thesis", ""))[:300] or "no parseable thesis"
+        logger.info("decider passed ({}): {}", model_used, thesis)
+        if on_pass is not None:
+            on_pass(model_used, thesis)
     return choice
 
 

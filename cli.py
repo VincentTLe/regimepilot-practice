@@ -402,6 +402,10 @@ def run_cycle(
             "symbol": c.symbol,
             "mid": c.mid,  # journaled so the post-close review can grade decisions against later prices
             "events": [e.kind for e in c.events],
+            # every event BEFORE the RSI / tape filters, with its direction: the
+            # post-close review grades the blocked candidates against later prices
+            "raw_events": [f"{e.kind}:{e.direction}" for e in whitelist_features[c.symbol].events]
+            if c.symbol in whitelist_features else [],
             "rsi": c.rsi,
             "atr": c.atr,
             "macd_hist": c.macd_hist,
@@ -433,7 +437,13 @@ def run_cycle(
     decisions = 0
     remaining = list(tradeable)
     while remaining and planned < max_entries and decisions < MAX_DECISIONS_PER_CYCLE:
-        choice = _decide(remaining, config, manual_mode, llm_transport)
+        offered = [c.symbol for c in remaining]
+        choice = _decide(
+            remaining, config, manual_mode, llm_transport,
+            on_pass=lambda model, thesis: record.setdefault("passes", []).append(
+                {"offered": offered, "model": model, "thesis": thesis}
+            ),
+        )
         decisions += 1
         if choice is None:
             break
@@ -562,7 +572,7 @@ def _build_trading_signals(
 
 
 def _decide(
-    tradeable, config: Config, manual_mode: bool, llm_transport
+    tradeable, config: Config, manual_mode: bool, llm_transport, on_pass=None
 ) -> EntryChoice | None:
     if manual_mode:
         choice = decision_layer.manual_decide(tradeable)
@@ -572,7 +582,7 @@ def _decide(
             return None
         try:
             choice = decision_layer.decide_entry(
-                tradeable, config.llm_api_key, transport=llm_transport
+                tradeable, config.llm_api_key, transport=llm_transport, on_pass=on_pass
             )
         except decision_layer.LlmError as error:
             logger.error("LLM decision failed, holding: {}", error)
