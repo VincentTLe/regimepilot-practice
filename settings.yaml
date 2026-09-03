@@ -26,6 +26,8 @@ signals:                     # technical analysis + entry events
   flow_min_trades: 50        # fewer prints than this = flow unknown -> entries gate flow_unknown (thin names)
   flow_min_imbalance: 0.10   # entry gate: CALL events need flow >= +this, PUT events <= -this; 0 = tape gate off. 90-session walk-forward: 0.10 keeps +0.15/+0.24 ATR to the close on both halves with 44% more signals than 0.15
   flow_exit_bars: 2          # reversal exit also needs flow against the spread on this many consecutive cycles
+  tape_event_min_imbalance: 0   # order-flow entry with NO bar pattern: fire tape_buy/tape_sell when |flow| >= this and the close sits beyond both EMA anchors; 0 = off
+  tape_event_min_trades: 300    # ...on at least this many prints behind the reading
   stale_bar_factor: 2.0      # block entries when the last bar is older than this many bar durations
   min_bars: 40               # completed bars required before indicators count (>= macd_slow + macd_signal)
 

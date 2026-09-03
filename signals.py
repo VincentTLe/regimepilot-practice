@@ -118,16 +118,26 @@ def build_signal(
         close, ema = _last("close"), _last(ema_column)
         return None if close is None or ema is None else close - ema
 
+    fast_dist, slow_dist = _dist("ema_fast"), _dist("ema_slow")
+    events = detect_events(df) if enough else ()
+    if enough:
+        # Order-flow entry: the tape alone (settings.TAPE_EVENT_MIN_IMBALANCE 0 = off).
+        extra = tape.tape_event(
+            flow, fast_dist, slow_dist,
+            min_imbalance=settings.TAPE_EVENT_MIN_IMBALANCE, min_trades=settings.TAPE_EVENT_MIN_TRADES,
+        )
+        if extra is not None and all(e.direction != extra.direction for e in events):
+            events = (*events, extra)
     return SymbolFeatures(
         symbol=symbol,
         mid=mid,
         rsi=_last("rsi"),
         atr=_last("atr"),
         macd_hist=_last("macd_hist"),
-        events=detect_events(df) if enough else (),
+        events=events,
         bar_age_seconds=bar_age,
-        ema_fast_dist=_dist("ema_fast"),
-        ema_slow_dist=_dist("ema_slow"),
+        ema_fast_dist=fast_dist,
+        ema_slow_dist=slow_dist,
         flow_imbalance=flow.imbalance if flow is not None else None,
         flow_trades=flow.trades if flow is not None else None,
         l1_imbalance=l1_imbalance,

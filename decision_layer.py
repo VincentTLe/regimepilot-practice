@@ -30,6 +30,9 @@ deterministic gates: a momentum event on its latest completed 5-minute bar
   gap_up / gap_down           - bar opened more than atr_event_mult ATR away from the prior close
   breakout_up / breakout_down - bar body (close minus open) exceeded atr_event_mult ATR
   macd_cross_up / macd_cross_down - MACD histogram crossed zero by at least 0.05 ATR
+  tape_buy / tape_sell        - no bar pattern: the tape alone, imbalance beyond the
+                                tape threshold on enough prints with the close on the
+                                trade's side of both EMA anchors (order-flow continuation)
 an RSI exhaustion filter, and a tape check: flow_imbalance is the tick-rule buy
 volume minus sell volume over their sum for the last minutes of prints (-1 =
 every print hit the bid, +1 = every print lifted the offer), flow_trades is the

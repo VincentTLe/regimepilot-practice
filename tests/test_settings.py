@@ -79,6 +79,7 @@ def broken(mutate) -> dict:
         (lambda r: r["exits"].update(trail_giveback=1.5), "exits.trail_giveback"),
         (lambda r: r["exits"].update(flatten_minutes_before_close=-1), "exits.flatten_minutes_before_close"),
         (lambda r: r["scanner"].update(top=-1), "scanner.top"),
+        (lambda r: r["signals"].update(tape_event_min_imbalance=1.5), "signals.tape_event_min_imbalance"),
         (lambda r: r["scanner"].update(enabled="yes"), "scanner.enabled"),
         (lambda r: r.pop("scanner"), "scanner"),
     ],

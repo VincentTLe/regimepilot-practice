@@ -89,7 +89,8 @@ _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_sign
                 "atr_event_mult", "stale_bar_factor", "min_bars",
                 "macd_min_hist_atr", "rsi_overbought", "rsi_oversold",
                 "trend_ema_fast", "trend_ema_slow",
-                "flow_lookback_minutes", "flow_min_trades", "flow_min_imbalance", "flow_exit_bars"}
+                "flow_lookback_minutes", "flow_min_trades", "flow_min_imbalance", "flow_exit_bars",
+                "tape_event_min_imbalance", "tape_event_min_trades"}
 _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
                   "strike_band_pct", "otm_only", "min_width_pct", "max_width_pct",
                   "min_open_interest", "max_quote_age_seconds", "max_leg_spread_bps",
@@ -149,6 +150,8 @@ def validate(raw: object) -> dict[str, object]:
     values["FLOW_MIN_TRADES"] = _integer(sig, "signals", "flow_min_trades", 0)
     values["FLOW_MIN_IMBALANCE"] = _number(sig, "signals", "flow_min_imbalance", 0, 1)
     values["FLOW_EXIT_BARS"] = _integer(sig, "signals", "flow_exit_bars", 1)
+    values["TAPE_EVENT_MIN_IMBALANCE"] = _number(sig, "signals", "tape_event_min_imbalance", 0, 1)
+    values["TAPE_EVENT_MIN_TRADES"] = _integer(sig, "signals", "tape_event_min_trades", 0)
 
     scr = _section(raw, "screener", _SCREENER_KEYS)
     values["MIN_DTE"] = _integer(scr, "screener", "min_dte", 1)
@@ -279,6 +282,8 @@ FLOW_LOOKBACK_MINUTES: int = _VALUES["FLOW_LOOKBACK_MINUTES"]  # type: ignore[as
 FLOW_MIN_TRADES: int = _VALUES["FLOW_MIN_TRADES"]  # type: ignore[assignment]
 FLOW_MIN_IMBALANCE: float = _VALUES["FLOW_MIN_IMBALANCE"]  # type: ignore[assignment]
 FLOW_EXIT_BARS: int = _VALUES["FLOW_EXIT_BARS"]  # type: ignore[assignment]
+TAPE_EVENT_MIN_IMBALANCE: float = _VALUES["TAPE_EVENT_MIN_IMBALANCE"]  # type: ignore[assignment]
+TAPE_EVENT_MIN_TRADES: int = _VALUES["TAPE_EVENT_MIN_TRADES"]  # type: ignore[assignment]
 MIN_DTE: int = _VALUES["MIN_DTE"]  # type: ignore[assignment]
 MAX_EXPIRY_LOOKAHEAD_DAYS: int = _VALUES["MAX_EXPIRY_LOOKAHEAD_DAYS"]  # type: ignore[assignment]
 EXPIRIES_TO_SCREEN: int = _VALUES["EXPIRIES_TO_SCREEN"]  # type: ignore[assignment]

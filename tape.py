@@ -81,6 +81,32 @@ def flow_agrees(direction: str, imbalance: float | None, min_imbalance: float) -
     return imbalance >= min_imbalance if direction == "CALL" else imbalance <= -min_imbalance
 
 
+def tape_event(
+    flow: FlowStats | None,
+    ema_fast_dist: float | None,
+    ema_slow_dist: float | None,
+    *,
+    min_imbalance: float,
+    min_trades: int,
+) -> Event | None:
+    """Order-flow entry event: the tape alone, no bar pattern required.
+
+    CALL (kind tape_buy) when the imbalance is at least +min_imbalance on at
+    least min_trades prints and the last close sits above BOTH EMA anchors;
+    PUT (tape_sell) mirrored. min_imbalance 0 turns the event off; an unknown
+    tape or unknown anchors never fire.
+    """
+    if min_imbalance <= 0 or flow is None or flow.imbalance is None or flow.trades < min_trades:
+        return None
+    if ema_fast_dist is None or ema_slow_dist is None:
+        return None
+    if flow.imbalance >= min_imbalance and ema_fast_dist > 0 and ema_slow_dist > 0:
+        return Event(kind="tape_buy", direction="CALL")
+    if flow.imbalance <= -min_imbalance and ema_fast_dist < 0 and ema_slow_dist < 0:
+        return Event(kind="tape_sell", direction="PUT")
+    return None
+
+
 def entry_flow_events(
     events: Sequence[Event], imbalance: float | None, min_imbalance: float
 ) -> tuple[Event, ...]:

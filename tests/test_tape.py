@@ -58,3 +58,21 @@ def test_opposing_streak_counts_trailing_opposing_readings():
     assert tape.opposing_streak("C", [0.5, -0.3, -0.2], 0.15) == 2
     assert tape.opposing_streak("C", [-0.3, 0.1], 0.15) == 0
     assert tape.opposing_streak("P", [0.3, None, 0.4], 0.15) == 1
+
+
+def _flow(imbalance, trades=500):
+    return tape.FlowStats(buy_volume=1000.0, sell_volume=500.0, trades=trades, imbalance=imbalance)
+
+
+def test_tape_event_fires_only_with_strong_flow_enough_prints_and_trend_alignment():
+    kw = {"min_imbalance": 0.25, "min_trades": 300}
+    assert tape.tape_event(_flow(0.4), 1.0, 2.0, **kw) == Event(kind="tape_buy", direction="CALL")
+    assert tape.tape_event(_flow(-0.4), -1.0, -2.0, **kw) == Event(kind="tape_sell", direction="PUT")
+    assert tape.tape_event(_flow(0.4), 1.0, -2.0, **kw) is None  # anchors disagree
+    assert tape.tape_event(_flow(-0.4), 1.0, 2.0, **kw) is None  # selling into an uptrend: no PUT
+    assert tape.tape_event(_flow(0.2), 1.0, 2.0, **kw) is None  # below the threshold
+    assert tape.tape_event(_flow(0.4, trades=100), 1.0, 2.0, **kw) is None  # too few prints
+    assert tape.tape_event(_flow(None), 1.0, 2.0, **kw) is None
+    assert tape.tape_event(None, 1.0, 2.0, **kw) is None
+    assert tape.tape_event(_flow(0.4), None, 2.0, **kw) is None
+    assert tape.tape_event(_flow(0.9), 1.0, 2.0, min_imbalance=0, min_trades=0) is None  # 0 = off

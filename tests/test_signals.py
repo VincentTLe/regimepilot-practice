@@ -282,3 +282,19 @@ def test_build_candidates_flow_gate_off_at_zero_threshold(monkeypatch):
     monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.0)
     out = signals.build_candidates({"IWM": features_with_flow("IWM", None, 0)}, True, BAR_SECONDS)
     assert out[0].gate_block is None and len(out[0].events) == 1
+
+
+def test_build_signal_adds_the_tape_event_when_enabled(monkeypatch):
+    import settings
+    import tape
+
+    monkeypatch.setattr(settings, "TAPE_EVENT_MIN_IMBALANCE", 0.25)
+    monkeypatch.setattr(settings, "TAPE_EVENT_MIN_TRADES", 300)
+    rising = signals.add_indicators(frame([ohlc(100 + i, 100.6 + i, 99.5 + i, 100.5 + i) for i in range(60)]))
+    strong = tape.FlowStats(buy_volume=1000.0, sell_volume=400.0, trades=500, imbalance=0.43)
+    features = signals.build_signal("SPY", rising, 100.0, NOW, BAR_SECONDS, flow=strong)
+    assert [(e.kind, e.direction) for e in features.events] == [("tape_buy", "CALL")]
+    selling = tape.FlowStats(buy_volume=400.0, sell_volume=1000.0, trades=500, imbalance=-0.43)
+    assert signals.build_signal("SPY", rising, 100.0, NOW, BAR_SECONDS, flow=selling).events == ()  # against the trend
+    monkeypatch.setattr(settings, "TAPE_EVENT_MIN_IMBALANCE", 0)
+    assert signals.build_signal("SPY", rising, 100.0, NOW, BAR_SECONDS, flow=strong).events == ()  # off
