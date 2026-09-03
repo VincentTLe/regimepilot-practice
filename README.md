@@ -327,14 +327,15 @@ and does not forecast the next bar, so it confirms and vetoes, never predicts:
   Stop, take-profit and expiry exits are untouched;
 - `flow_min_imbalance: 0` and `reversal_needs_flow: false` restore `dev/paca`.
 
-**Exits, rewritten for "cut losers fast, hold winners long".** Stop at −30% of
-the debit (`stop_fraction: 0.7`, was −50%), the fixed take-profit moved out of
-the way (`take_profit_mult: 6.0`), and a new **trailing exit**: once the mark
-has reached `trail_arm_mult` (1.5×) the debit, giving back `trail_giveback`
-(25%) of the peak mark exits with reason `trail`. The peak lives in the loop
-process, so only `--loop` trails. Size caps doubled (1% per entry, 2% per
-cycle, 3% per underlying, 15% total): with the tighter stop a full loser still
-costs ~0.3% of equity. Expiry, reversal and stop keep their precedence.
+**Exits and size (settled on the 90-session backtest).** The fixed take-profit
+is moved out of the way (`take_profit_mult: 6.0`) so winners run to the close;
+the stop stays at −50% (`stop_fraction: 0.5`): over 90 sessions tighter stops
+(−30%, or 1 ATR on the underlying) cut the small positive drift and did not
+raise expectancy. A **trailing exit** exists (`trail_arm_mult` / `trail_giveback`,
+reason `trail`, peak kept in the loop process) but ships off (`trail_arm_mult: 0`)
+for the same reason. Size caps doubled (1% per entry, 2% per cycle, 3% per
+underlying, 15% total): a full stop costs 0.5% of equity. IBIT, MSTR, SLV and
+USO left the whitelist: too few IEX prints for a reliable tape reading.
 
 **3. Continuous loop with a live dashboard.**
 

@@ -6,7 +6,7 @@
 # the program with a message naming the exact key. Edit, save, restart.
 # ============================================================================
 
-symbols: [SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN, IBIT, MSTR, SLV, WMT, GLD, USO, XLE]   # candidate underlyings scanned every cycle
+symbols: [SPY, QQQ, IWM, AAPL, NVDA, TSLA, MSFT, AMZN, WMT, GLD, XLE]   # candidate underlyings scanned every cycle (IBIT/MSTR/SLV/USO dropped 2026-09-03: too few IEX prints for the tape)
 bar_timeframe: 5m           # bar duration for signals: 5m / 15m / 1h / 1d / 1w
 loop_interval_seconds: 300   # seconds between cycles with `run --loop` (900 = 15 min)
 
@@ -53,9 +53,9 @@ risk:                        # position sizing — all fractions of LIVE account
   allow_stacking: true       # allow a further SAME-direction entry on an underlying already held (sized by per_underlying_fraction); false = one spread per underlying
 
 exits:                       # mechanical, checked every cycle — the LLM is never consulted
-  stop_fraction: 0.7         # stop-loss: exit when net mark <= this fraction of entry debit (0.7 = -30%: cut losers fast)
+  stop_fraction: 0.5         # stop-loss: exit when net mark <= this fraction of entry debit (0.5 = -50%; 90-session backtest: tighter stops cut the drift)
   take_profit_mult: 6.0      # take-profit: exit when net mark >= this multiple of entry debit (6.0 = +500%: let the trail manage winners)
-  trail_arm_mult: 1.5        # trailing exit arms once the mark has reached this multiple of the debit (0 = off); needs --loop (peak lives in the process)
+  trail_arm_mult: 0          # trailing exit arms once the mark has reached this multiple of the debit (0 = off; 90-session backtest: trailing cut winners); needs --loop
   trail_giveback: 0.25       # ...then exit when the mark gives back this fraction of its peak (0.25: a 3.20 peak on a 2.00 debit exits at 2.40)
   exit_dte: 2                # always exit at this many days to expiration or fewer
   reversal_exit: true        # close a spread when an entry event fires AGAINST it (e.g. gap_down while holding a call spread)
