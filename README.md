@@ -397,6 +397,18 @@ data on this account); the `$ proxy` column assumes delta 0.4 and $12 friction.
 uv run --env-file .env backtest_tape.py --days 5            # -> logs/backtest_tape.csv + summary
 ```
 
+**5b. Rule audit by counterfactual replay.** `review_rules.py` grades every
+decision of a session against what the underlying did next: entries, decider
+passes (thesis journaled), and every candidate blocked by each rule (graded on
+its raw events), plus a tape-only counterfactual. A rule that keeps blocking
+winners shows up in its own row. The idea, and the planned ε-greedy exploration
+on top of it, is written up for the team in
+[docs/rule-audit-and-exploration.md](docs/rule-audit-and-exploration.md).
+
+```bash
+uv run --env-file .env review_rules.py --date 2026-09-03 --html surge_artifacts/paca-backtest/review_2026-09-03.html --deploy
+```
+
 **6. Walk-forward check (the anti-overfit step).** `backtest_walkforward.py`
 splits a `backtest_tape.py` CSV into the first 60 sessions (in-sample) and the
 rest (out-of-sample) and prints every cut per half — tape status, event class,
