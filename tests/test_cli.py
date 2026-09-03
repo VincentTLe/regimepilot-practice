@@ -910,3 +910,23 @@ def test_run_refuses_to_start_when_the_llm_ping_fails(monkeypatch):
     monkeypatch.setattr(cli.decision_layer, "ping", failing_ping)
     result = CliRunner().invoke(cli.app, ["run"])
     assert result.exit_code == 1 and "HTTP 401" in result.output
+
+
+def test_trail_exit_tracks_the_peak_mark_across_cycles(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "TRAIL_ARM_MULT", 1.5)
+    monkeypatch.setattr(settings, "TRAIL_GIVEBACK", 0.25)
+    monkeypatch.setattr(settings, "TAKE_PROFIT_MULT", 6.0)
+    trading = FakeTradingClient(positions=held_call_spread())  # debit 2.00
+    stock = FakeStockDataClient(bars_by_symbol={"SPY": quiet_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)})
+    flow_state = {}
+    high = {LONG_OCC: fake_snapshot(3.9, 4.1), SHORT_OCC: fake_snapshot(0.7, 0.9)}   # net mark 3.2: armed
+    first = cli.run_cycle(make_config(), trading, stock, FakeOptionDataClient(high),
+                          execute=False, manual_mode=True, flow_state=flow_state)
+    assert first["exits"] == []
+    lower = {LONG_OCC: fake_snapshot(2.9, 3.1), SHORT_OCC: fake_snapshot(0.6, 0.8)}  # net mark 2.3 <= 3.2 x 0.75
+    second = cli.run_cycle(make_config(), trading, stock, FakeOptionDataClient(lower),
+                           execute=False, manual_mode=True, flow_state=flow_state)
+    assert second["exits"][0]["reason"] == "trail"
+    assert second["exits"][0]["peak_mark"] == pytest.approx(3.2)

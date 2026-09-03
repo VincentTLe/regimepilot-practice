@@ -36,6 +36,7 @@ class TapeState:
 
     readings: deque = field(default_factory=deque)
     pending_reversal: int = 0
+    peak_marks: dict = field(default_factory=dict)  # "long/short" leg symbols -> highest net mark seen (trailing exit)
 
 
 def tick_rule(trades: Sequence[tuple[float, float]], min_trades: int) -> FlowStats:

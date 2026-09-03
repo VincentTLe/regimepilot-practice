@@ -324,3 +324,26 @@ def test_over_cap_warnings():
     assert pos_and_risk.over_cap_warnings([spread(underlying="AMZN", debit=None)], 100_000.0) == []
     # unknown equity: no cap to compare against
     assert pos_and_risk.over_cap_warnings(book, None) == []
+
+
+# --- trailing exit: lock in a winner once it has run (hold winners long, give back little) ---
+
+def test_trail_exit_fires_after_arming_and_giveback(monkeypatch):
+    monkeypatch.setattr(settings, "TRAIL_ARM_MULT", 1.5)
+    monkeypatch.setattr(settings, "TRAIL_GIVEBACK", 0.25)
+    monkeypatch.setattr(settings, "TAKE_PROFIT_MULT", 6.0)
+    # debit 2.00; peak mark 3.20 (>= 1.5 x debit, armed); mark 2.30 <= 3.20 x 0.75 = 2.40 -> trail
+    decision = pos_and_risk.exit_decision(spread(), quote(2.9, 3.1), quote(0.6, 0.8), TODAY, peak_mark=3.2)
+    assert decision is not None and decision.reason == "trail" and decision.net_mark == pytest.approx(2.3)
+    # still above the trail level -> hold
+    assert pos_and_risk.exit_decision(spread(), quote(3.1, 3.3), quote(0.6, 0.8), TODAY, peak_mark=3.2) is None
+    # peak never reached the arming level -> the trail is not active
+    assert pos_and_risk.exit_decision(spread(), quote(2.9, 3.1), quote(0.6, 0.8), TODAY, peak_mark=2.8) is None
+    # no peak known (fresh process) -> no trail
+    assert pos_and_risk.exit_decision(spread(), quote(2.9, 3.1), quote(0.6, 0.8), TODAY) is None
+
+
+def test_trail_exit_off_when_arm_mult_is_zero(monkeypatch):
+    monkeypatch.setattr(settings, "TRAIL_ARM_MULT", 0.0)
+    monkeypatch.setattr(settings, "TAKE_PROFIT_MULT", 6.0)
+    assert pos_and_risk.exit_decision(spread(), quote(2.9, 3.1), quote(0.6, 0.8), TODAY, peak_mark=9.0) is None

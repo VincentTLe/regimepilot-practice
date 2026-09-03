@@ -41,7 +41,7 @@ def broken(mutate) -> dict:
         (lambda r: r["exits"].update(stop_fraction=5), "exits.stop_fraction"),
         (lambda r: r["exits"].update(take_profit_mult=0.5), "exits.take_profit_mult"),
         (lambda r: r["risk"].update(total_fraction="lots"), "risk.total_fraction"),
-        (lambda r: r["risk"].update(per_entry_fraction=0.03), "risk.per_entry_fraction"),  # > per_underlying
+        (lambda r: r["risk"].update(per_entry_fraction=0.05), "risk.per_entry_fraction"),  # > per_underlying (0.03)
         (lambda r: r["risk"].update(per_underlying_fraction=0.2), "risk.per_underlying_fraction"),  # > total
         (lambda r: r["signals"].update(macd_fast=30), "signals.macd_fast"),  # >= slow
         (lambda r: r["signals"].update(rsi_period=0), "signals.rsi_period"),
@@ -75,6 +75,8 @@ def broken(mutate) -> dict:
         (lambda r: r["signals"].update(flow_min_trades=-1), "signals.flow_min_trades"),
         (lambda r: r["signals"].update(flow_exit_bars=0), "signals.flow_exit_bars"),
         (lambda r: r["exits"].update(reversal_needs_flow=1), "exits.reversal_needs_flow"),  # must be a bool
+        (lambda r: r["exits"].update(trail_arm_mult=0.5), "exits.trail_arm_mult"),  # 0 (off) or >= 1
+        (lambda r: r["exits"].update(trail_giveback=1.5), "exits.trail_giveback"),
     ],
 )
 def test_validate_rejects_and_names_the_key(mutate, expect_in_message):

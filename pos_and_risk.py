@@ -126,15 +126,19 @@ def exit_decision(
     short_quote: LegQuote | None,
     today: date,
     opposing_event: bool = False,
+    peak_mark: float | None = None,
 ) -> ExitDecision | None:
     """Mechanical exit verdict for one open spread, or None to keep holding.
 
-    Precedence: expiry, reversal, stop, take-profit. Expiry (DTE <=
+    Precedence: expiry, reversal, stop, take-profit, trail. Expiry (DTE <=
     settings.EXIT_DTE) and reversal (an entry event against the spread, if
     settings.REVERSAL_EXIT) exit even on missing marks or unknown entry debit —
-    they are signal-based. Stop and take-profit need both a known entry debit
-    and fresh two-sided marks; when either is unknown we hold and let the
-    caller log the gap rather than guess.
+    they are signal-based. Stop, take-profit and trail need both a known entry
+    debit and fresh two-sided marks; when either is unknown we hold and let the
+    caller log the gap rather than guess. The trail uses `peak_mark`, the highest
+    net mark seen since the loop started watching the spread (None = unknown):
+    once the peak reached TRAIL_ARM_MULT x debit, giving back TRAIL_GIVEBACK of
+    the peak exits — winners run, but a run that reverses is locked in.
     """
     dte = (spread.expiration - today).days
     if dte <= settings.EXIT_DTE:
@@ -152,15 +156,26 @@ def exit_decision(
         return ExitDecision(spread=spread, reason="stop", net_mark=net_mark)
     if net_mark >= settings.TAKE_PROFIT_MULT * spread.net_entry_debit:
         return ExitDecision(spread=spread, reason="take_profit", net_mark=net_mark)
+    if (
+        settings.TRAIL_ARM_MULT > 0
+        and peak_mark is not None
+        and peak_mark >= settings.TRAIL_ARM_MULT * spread.net_entry_debit
+        and net_mark <= peak_mark * (1 - settings.TRAIL_GIVEBACK)
+    ):
+        return ExitDecision(spread=spread, reason="trail", net_mark=net_mark)
     return None
 
 
-def _net_mark(long_quote: LegQuote | None, short_quote: LegQuote | None) -> float | None:
+def net_mark(long_quote: LegQuote | None, short_quote: LegQuote | None) -> float | None:
+    """Net mark of a debit vertical from leg mids; None when either side is missing."""
     if long_quote is None or short_quote is None:
         return None
     if long_quote.mid is None or short_quote.mid is None:
         return None
     return long_quote.mid - short_quote.mid
+
+
+_net_mark = net_mark
 
 
 def open_premium_at_risk(spreads: list[OpenSpread]) -> float | None:

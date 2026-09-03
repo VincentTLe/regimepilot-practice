@@ -96,7 +96,8 @@ _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
                   "min_debit_frac", "max_debit_frac"}
 _RISK_KEYS = {"per_entry_fraction", "per_underlying_fraction", "per_cycle_fraction",
               "total_fraction", "allow_stacking"}
-_EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit", "reversal_needs_flow"}
+_EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit", "reversal_needs_flow",
+              "trail_arm_mult", "trail_giveback"}
 _LLM_KEYS = {"provider", "base_url", "primary_model", "fallback_models",
              "reasoning_effort", "timeout_seconds", "json_mode"}
 _REASONING_EFFORTS = ("low", "high", "max")
@@ -196,6 +197,11 @@ def validate(raw: object) -> dict[str, object]:
     if not isinstance(exits["reversal_needs_flow"], bool):
         _fail("exits.reversal_needs_flow", "must be true or false", exits["reversal_needs_flow"])
     values["REVERSAL_NEEDS_FLOW"] = exits["reversal_needs_flow"]
+    arm = _number(exits, "exits", "trail_arm_mult", 0)
+    if 0 < arm < 1:
+        _fail("exits.trail_arm_mult", "must be 0 (off) or at least 1 (a multiple of the entry debit)", exits["trail_arm_mult"])
+    values["TRAIL_ARM_MULT"] = arm
+    values["TRAIL_GIVEBACK"] = _number(exits, "exits", "trail_giveback", 0, 1, lo_open=True, hi_open=True)
 
     llm = _section(raw, "llm", _LLM_KEYS)
     provider = llm["provider"]
@@ -286,6 +292,8 @@ TAKE_PROFIT_MULT: float = _VALUES["TAKE_PROFIT_MULT"]  # type: ignore[assignment
 EXIT_DTE: int = _VALUES["EXIT_DTE"]  # type: ignore[assignment]
 REVERSAL_EXIT: bool = _VALUES["REVERSAL_EXIT"]  # type: ignore[assignment]
 REVERSAL_NEEDS_FLOW: bool = _VALUES["REVERSAL_NEEDS_FLOW"]  # type: ignore[assignment]
+TRAIL_ARM_MULT: float = _VALUES["TRAIL_ARM_MULT"]  # type: ignore[assignment]
+TRAIL_GIVEBACK: float = _VALUES["TRAIL_GIVEBACK"]  # type: ignore[assignment]
 LLM_PROVIDER: str = _VALUES["LLM_PROVIDER"]  # type: ignore[assignment]
 LLM_BASE_URL: str = _VALUES["LLM_BASE_URL"]  # type: ignore[assignment]
 PRIMARY_MODEL: str = _VALUES["PRIMARY_MODEL"]  # type: ignore[assignment]

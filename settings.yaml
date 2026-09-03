@@ -46,15 +46,17 @@ screener:                    # which vertical spreads are even considered
   max_debit_frac: 0.45       # debit at most this fraction of width: keeps reward-to-risk >= ~1.2
 
 risk:                        # position sizing — all fractions of LIVE account equity
-  per_entry_fraction: 0.005  # one entry's total debit <= this fraction (0.005 = $500 on $100k)
-  per_underlying_fraction: 0.015   # open premium at risk on ONE underlying <= this fraction (0.02 = $2k on $100k)
-  per_cycle_fraction: 0.01   # new premium per cycle <= this fraction of equity; also caps a cycle at floor(per_cycle / per_entry) entries (0.01/0.005 = 2)
-  total_fraction: 0.10       # total open premium at risk <= this fraction of equity
+  per_entry_fraction: 0.01   # one entry's total debit <= this fraction (0.01 = $1,000 on $100k; with stop_fraction 0.7 a full stop costs ~0.3% of equity)
+  per_underlying_fraction: 0.03    # open premium at risk on ONE underlying <= this fraction
+  per_cycle_fraction: 0.02   # new premium per cycle <= this fraction of equity; also caps a cycle at floor(per_cycle / per_entry) entries (0.02/0.01 = 2)
+  total_fraction: 0.15       # total open premium at risk <= this fraction of equity
   allow_stacking: true       # allow a further SAME-direction entry on an underlying already held (sized by per_underlying_fraction); false = one spread per underlying
 
 exits:                       # mechanical, checked every cycle — the LLM is never consulted
-  stop_fraction: 0.5         # stop-loss: exit when net mark <= this fraction of entry debit (0.5 = -50%)
-  take_profit_mult: 3.0      # take-profit: exit when net mark >= this multiple of entry debit (2.0 = +100%)
+  stop_fraction: 0.7         # stop-loss: exit when net mark <= this fraction of entry debit (0.7 = -30%: cut losers fast)
+  take_profit_mult: 6.0      # take-profit: exit when net mark >= this multiple of entry debit (6.0 = +500%: let the trail manage winners)
+  trail_arm_mult: 1.5        # trailing exit arms once the mark has reached this multiple of the debit (0 = off); needs --loop (peak lives in the process)
+  trail_giveback: 0.25       # ...then exit when the mark gives back this fraction of its peak (0.25: a 3.20 peak on a 2.00 debit exits at 2.40)
   exit_dte: 2                # always exit at this many days to expiration or fewer
   reversal_exit: true        # close a spread when an entry event fires AGAINST it (e.g. gap_down while holding a call spread)
   reversal_needs_flow: true  # ...but only once the tape has been against the spread for signals.flow_exit_bars cycles; false = event alone (dev/paca rule)

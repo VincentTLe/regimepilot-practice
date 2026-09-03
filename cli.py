@@ -269,6 +269,16 @@ def run_cycle(
             opposing = armed and (
                 not settings.REVERSAL_NEEDS_FLOW or flow_state is None or against is None or against
             )
+            # Trailing exit memory: the highest net mark seen while the loop watched
+            # this spread (per process; a restart starts the peak afresh).
+            peak_mark = None
+            if state is not None:
+                spread_key = f"{spread.long_symbol}/{spread.short_symbol}"
+                mark_now = pos_and_risk.net_mark(long_q, short_q)
+                if mark_now is not None:
+                    previous = state.peak_marks.get(spread_key)
+                    state.peak_marks[spread_key] = mark_now if previous is None else max(previous, mark_now)
+                peak_mark = state.peak_marks.get(spread_key)
             if opposing and state is not None:
                 state.pending_reversal = 0
             if armed and not opposing:
@@ -284,6 +294,7 @@ def run_cycle(
                 short_q,
                 clock.server_time.date(),
                 opposing_event=opposing,
+                peak_mark=peak_mark,
             )
             if decision is None:
                 if spread.net_entry_debit is None:
@@ -298,6 +309,7 @@ def run_cycle(
                 "net_mark": decision.net_mark,
                 "flow_imbalance": flow_now,
                 "flow_against": against,
+                "peak_mark": peak_mark,
             }
             if {spread.long_symbol, spread.short_symbol} & account.open_order_symbols:
                 entry["skipped"] = "pending_order"
