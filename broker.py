@@ -47,7 +47,7 @@ STOCK_FEED = DataFeed.IEX
 OPTION_FEED = OptionsFeed.INDICATIVE  # explicit: the SDK default varies by subscription
 SNAPSHOT_BATCH = 100
 CONTRACT_PAGE_LIMIT = 1000
-TRADES_LIMIT = 20_000  # prints per trades request; the busiest IEX names print ~1.2k per 15 min
+TRADES_LIMIT = 100_000  # TOTAL prints per multi-symbol trades request (alpaca-py counts across symbols); a busy open prints ~15-30k in 15 min
 MAX_CONTRACT_PAGES = 5
 
 _LIVE_FLAG_VARS = ("ALPACA_LIVE", "ALPACA_LIVE_TRADING", "APCA_LIVE")
@@ -208,6 +208,7 @@ def fetch_account_state(trading: Any, whitelist: tuple[str, ...]) -> AccountStat
         legs=tuple(legs),
         unparsed_positions=tuple(unparsed),
         open_order_symbols=frozenset(order_symbols),
+        account_number=str(getattr(account, "account_number", "") or "") or None,
     )
 
 
@@ -349,6 +350,12 @@ def fetch_recent_trades(
     data = getattr(raw, "data", None)
     if data is None:
         data = raw if isinstance(raw, dict) else {}
+    returned = sum(len(rows or []) for rows in data.values()) if hasattr(data, "values") else 0
+    if returned >= TRADES_LIMIT:
+        # The SDK stops paging once the cap is reached across ALL symbols, so the
+        # newest prints of some symbol are missing: a confident-looking but stale
+        # reading. Refuse the whole read; the cycle treats the tape as unknown.
+        raise BrokerError(f"trades read truncated at {TRADES_LIMIT} prints")
     trades: dict[str, list[tuple[float, float]]] = {}
     for symbol in symbols:
         pairs: list[tuple[float, float]] = []

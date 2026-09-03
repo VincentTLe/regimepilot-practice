@@ -31,3 +31,13 @@ def test_fetch_spot_quotes_carries_sizes_and_mids_wrapper_still_works():
     assert quotes["QQQ"].mid == pytest.approx(50.1)
     assert quotes["IWM"].mid is None and quotes["IWM"].bid_size is None
     assert broker.fetch_spot_mids(stock, ("SPY", "IWM")) == {"SPY": 100.0, "IWM": None}
+
+
+def test_fetch_recent_trades_refuses_a_truncated_window(monkeypatch):
+    # alpaca-py counts `limit` across ALL symbols: hitting it means the newest prints
+    # of some symbol are missing, so the whole read is reported as unusable.
+    monkeypatch.setattr(broker, "TRADES_LIMIT", 3)
+    stock = FakeStockDataClient(trades_by_symbol={"SPY": [(100.0, 1, NOW)] * 2, "QQQ": [(50.0, 1, NOW)]})
+    with pytest.raises(broker.BrokerError) as excinfo:
+        broker.fetch_recent_trades(stock, ("SPY", "QQQ"), 15, NOW)
+    assert "truncated" in str(excinfo.value)

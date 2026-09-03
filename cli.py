@@ -10,6 +10,7 @@ Run as: uv run --env-file .env cli.py <command>
 from __future__ import annotations
 
 import math
+import os
 import sys
 import time
 from collections import deque
@@ -43,6 +44,7 @@ from data_models import (
 
 JOURNAL_PATH = Path("logs") / "cycles.jsonl"
 MIN_OPTIONS_LEVEL = 3  # spreads need Alpaca options trading level 3
+MAX_DECISIONS_PER_CYCLE = 3  # LLM calls per cycle: keeps the worst-case wall-clock under the interval
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -135,13 +137,16 @@ def run_cycle(
     execute: bool,
     manual_mode: bool,
     llm_transport: object | None = None,
-    flow_state: dict[str, deque] | None = None,
+    flow_state: dict[str, tape.TapeState] | None = None,
 ) -> dict:
     """One full cycle. Returns the journal record (also appended to the journal).
 
-    `flow_state` keeps the last FLOW_EXIT_BARS tape readings per underlying
-    across cycles (the loop passes one dict for its lifetime); a reversal exit
-    needs the tape against the spread for that many consecutive cycles.
+    `flow_state` keeps, per underlying, the last FLOW_EXIT_BARS tape readings and
+    a pending-reversal counter across cycles (the loop passes one dict for its
+    lifetime). A reversal exit needs the opposing event AND the tape against the
+    spread for FLOW_EXIT_BARS consecutive cycles; the event is a one-bar pulse,
+    so a held-back reversal stays armed for FLOW_EXIT_BARS more cycles. Without
+    state (single-shot runs) the event-only rule applies.
     """
     started = datetime.now(timezone.utc)
     cycle_id = started.strftime("%Y%m%d-%H%M%S")
@@ -237,24 +242,36 @@ def run_cycle(
             flow_now = symbol_features.flow_imbalance if symbol_features is not None else None
             against = None
             streak = 0
+            armed = opposing_event
+            state = None
             if flow_state is not None:
-                readings = flow_state.setdefault(
-                    spread.underlying, deque(maxlen=settings.FLOW_EXIT_BARS)
-                )
-                if spread.underlying not in tape_updated:
-                    readings.append(flow_now)
+                state = flow_state.get(spread.underlying)
+                if state is None:
+                    state = flow_state[spread.underlying] = tape.TapeState(
+                        readings=deque(maxlen=settings.FLOW_EXIT_BARS)
+                    )
+                if spread.underlying not in tape_updated:  # once per underlying per cycle
+                    state.readings.append(flow_now)
                     tape_updated.add(spread.underlying)
+                    if opposing_event:
+                        state.pending_reversal = settings.FLOW_EXIT_BARS  # arm for a few cycles
+                    elif state.pending_reversal > 0:
+                        state.pending_reversal -= 1  # another cycle spent waiting for the tape
+                armed = opposing_event or state.pending_reversal > 0
                 against = tape.flow_against(
-                    spread.option_type, list(readings), settings.FLOW_EXIT_BARS, settings.FLOW_MIN_IMBALANCE
+                    spread.option_type, list(state.readings), settings.FLOW_EXIT_BARS, settings.FLOW_MIN_IMBALANCE
                 )
-                streak = tape.opposing_streak(spread.option_type, list(readings), settings.FLOW_MIN_IMBALANCE)
-            # Reversal needs the event AND (when required) the tape against the spread
-            # for FLOW_EXIT_BARS cycles. Unknown tape (None) or no state at all falls
-            # back to the event-only rule: never hold a position on missing data.
-            opposing = opposing_event and (
+                streak = tape.opposing_streak(spread.option_type, list(state.readings), settings.FLOW_MIN_IMBALANCE)
+            # Reversal needs the event (or a still-armed one) AND, when required, the
+            # tape against the spread for FLOW_EXIT_BARS cycles. Unknown tape (None)
+            # or no state at all falls back to the event-only rule: never hold a
+            # position on missing data.
+            opposing = armed and (
                 not settings.REVERSAL_NEEDS_FLOW or flow_state is None or against is None or against
             )
-            if opposing_event and not opposing:
+            if opposing and state is not None:
+                state.pending_reversal = 0
+            if armed and not opposing:
                 note = (
                     f"{spread.underlying} {spread.expiration} {spread.option_type}: "
                     f"opposing event, tape streak {streak}/{settings.FLOW_EXIT_BARS}"
@@ -357,9 +374,11 @@ def run_cycle(
     record["entries"] = entries
     cycle_spent = 0.0  # premium committed by earlier entries in this cycle
     planned = 0
+    decisions = 0
     remaining = list(tradeable)
-    while remaining and planned < max_entries:
+    while remaining and planned < max_entries and decisions < MAX_DECISIONS_PER_CYCLE:
         choice = _decide(remaining, config, manual_mode, llm_transport)
+        decisions += 1
         if choice is None:
             break
         remaining = [c for c in remaining if c.symbol != choice.symbol]
@@ -777,6 +796,15 @@ def run(
         # Without a key every cycle would silently hold: refuse to start instead.
         typer.echo("FEATHERLESS_API_KEY missing: set it in .env or run with --manual-mode")
         raise typer.Exit(1)
+    if not manual_mode:
+        # A present-but-rejected key or a wrong model id would also mean a silent
+        # all-hold day: prove the LLM answers before the first cycle.
+        try:
+            model, seconds = decision_layer.ping(config.llm_api_key)
+        except decision_layer.LlmError as error:
+            typer.echo(f"LLM check failed ({settings.LLM_PROVIDER}): {error}")
+            raise typer.Exit(1)
+        logger.info("LLM ready: {} answered in {:.1f}s", model, seconds)
     if execute:
         logger.warning("ARMED: paper order submission is enabled")
     # Seed fill tracking from orders already open at the broker, so a restart
@@ -794,7 +822,9 @@ def run(
             "dashboard: http://localhost:{}/paca-cycles/  http://localhost:{}/paca-candles/",
             serve_port, serve_port,
         )
-    flow_state: dict[str, deque] = {}  # tape readings per underlying, kept across cycles
+    # Tape memory lives in the loop process; a single-shot run has no previous
+    # cycle to confirm against, so it keeps the event-only reversal rule.
+    flow_state: dict[str, tape.TapeState] | None = {} if loop else None
     try:
         while True:
             cycle_started = time.monotonic()
@@ -872,6 +902,23 @@ def preflight() -> None:
         f"OK   Alpaca connectivity — market {state}, server time {clock.server_time}"
     )
 
+    try:
+        sdk_number = str(getattr(broker.guarded("account read", trading.get_account), "account_number", "") or "")
+    except broker.BrokerError:
+        sdk_number = ""
+    profile = os.environ.get("ALPACA_CLI_PROFILE", "").strip() or None
+    snapshot = dashboard.cli_snapshot(profile, expected_account_number=sdk_number or None)
+    if snapshot["source"] == "alpaca-cli":
+        typer.echo(
+            f"OK   Alpaca CLI — profile {profile or 'default'} reads account "
+            f"{snapshot['account'].get('account_number')} (same as the .env keys)"
+        )
+    else:
+        typer.echo(
+            f"WARN Alpaca CLI snapshot unavailable ({snapshot.get('cli_error')}); "
+            "the dashboard shows SDK data only"
+        )
+
     if not config.llm_api_key:
         typer.echo("WARN LLM key missing (FEATHERLESS_API_KEY): only --manual-mode can decide entries")
     else:
@@ -912,6 +959,7 @@ def account(
     if export:
         snapshot = {
             "generated_at": datetime.now(timezone.utc),
+            "account_number": state.account_number,
             "equity": state.equity,
             "options_level": state.options_level,
             "open_risk": open_risk,
@@ -1002,12 +1050,21 @@ def candidates() -> None:
     setup_logging()
     config, trading, stock_data, _ = _bootstrap()
     clock = broker.fetch_clock(trading)
-    mids = broker.fetch_spot_mids(stock_data, config.symbols)
+    quotes = broker.fetch_spot_quotes(stock_data, config.symbols)
+    mids = {symbol: quote.mid for symbol, quote in quotes.items()}
+    try:
+        trades = broker.fetch_recent_trades(
+            stock_data, config.symbols, settings.FLOW_LOOKBACK_MINUTES, clock.server_time
+        )
+    except broker.BrokerError as error:
+        logger.warning("trades read failed, tape unknown: {}", error)
+        trades = {}
     features = _build_trading_signals(
-        config.symbols, config, stock_data, mids, clock.server_time
+        config.symbols, config, stock_data, mids, clock.server_time, trades=trades, quotes=quotes
     )
     for c in signals.build_candidates(features, clock.is_open, config.bar_seconds):
         events = ",".join(e.kind for e in c.events) or "-"
+        flow = f"{c.flow_imbalance:+.2f}/{c.flow_trades}" if c.flow_imbalance is not None else f"?/{c.flow_trades}"
         rsi = f"{c.rsi:.1f}" if c.rsi is not None else "-"
         atr = f"{c.atr:.3f}" if c.atr is not None else "-"
         hist = f"{c.macd_hist:+.4f}" if c.macd_hist is not None else "-"
@@ -1016,7 +1073,7 @@ def candidates() -> None:
         typer.echo(
             f"{c.symbol:<6} mid={c.mid} rsi={rsi} atr={atr} macd_hist={hist} "
             f"ema{settings.TREND_EMA_FAST}={ema_fast} ema{settings.TREND_EMA_SLOW}={ema_slow} "
-            f"events={events} gate={c.gate_block or 'PASS'}"
+            f"flow={flow} events={events} gate={c.gate_block or 'PASS'}"
         )
 
 

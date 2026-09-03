@@ -10,7 +10,8 @@ conviction before a reversal exit — never to predict.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Sequence
 
 from data_models import Event
@@ -22,6 +23,19 @@ class FlowStats:
     sell_volume: float
     trades: int
     imbalance: float | None  # (buy − sell) / (buy + sell); None = unknown (too few prints or no signed volume)
+
+
+@dataclass
+class TapeState:
+    """Per-underlying memory the loop keeps across cycles.
+
+    `readings` holds the last FLOW_EXIT_BARS imbalance readings; `pending_reversal`
+    counts the cycles a held-back reversal stays armed — the opposing event is a
+    one-bar pulse, the tape confirmation may only complete a cycle later.
+    """
+
+    readings: deque = field(default_factory=deque)
+    pending_reversal: int = 0
 
 
 def tick_rule(trades: Sequence[tuple[float, float]], min_trades: int) -> FlowStats:

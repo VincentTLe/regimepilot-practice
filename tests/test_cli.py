@@ -836,3 +836,77 @@ def test_reversal_exit_falls_back_to_event_alone_when_flow_unknown(monkeypatch):
     record = cli.run_cycle(make_config(), trading, stock, FakeOptionDataClient(HOLD_ZONE_MARKS),
                            execute=False, manual_mode=True, flow_state={})
     assert record["exits"][0]["reason"] == "reversal"
+
+
+def buying_prints(n=60):
+    return [(650.0 + 0.01 * i, 10, None) for i in range(n)]  # every print an uptick
+
+
+def test_tape_gate_end_to_end_with_production_thresholds(monkeypatch):
+    import settings
+
+    monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.15)
+    monkeypatch.setattr(settings, "FLOW_MIN_TRADES", 50)
+    trading, _, options = make_clients()
+    # buyers lifting offers + breakout_up -> the entry is planned and the tape journaled
+    stock = FakeStockDataClient(bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)},
+                                trades_by_symbol={"SPY": buying_prints()})
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=False, manual_mode=True)
+    assert record["entries"][0]["receipt"]["dry_run"] is True
+    spy = next(c for c in record["candidates"] if c["symbol"] == "SPY")
+    assert spy["flow_imbalance"] == 1.0 and spy["flow_trades"] == 60 and spy["gate_block"] is None
+    # sellers hitting bids against a breakout_up -> flow_disagree, no entry
+    stock = FakeStockDataClient(bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)},
+                                trades_by_symbol={"SPY": selling_prints(60)})
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=False, manual_mode=True)
+    assert record["entries"] == []
+    assert next(c for c in record["candidates"] if c["symbol"] == "SPY")["gate_block"] == "flow_disagree"
+    # trades read failure -> tape unknown -> no entry, cycle still completes
+    stock = FakeStockDataClient(bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)},
+                                trades_error=RuntimeError("feed down"))
+    record = cli.run_cycle(make_config(), trading, stock, options, execute=False, manual_mode=True)
+    assert record["entries"] == [] and record["outcome"] == "hold"
+    assert next(c for c in record["candidates"] if c["symbol"] == "SPY")["gate_block"] == "flow_unknown"
+
+
+def test_reversal_pending_survives_the_event_pulse(monkeypatch):
+    # The opposing event fires on ONE bar; the tape confirmation may only complete
+    # on the next cycle, when the bar no longer carries the event. The reversal
+    # must still fire then.
+    import settings
+
+    monkeypatch.setattr(settings, "REVERSAL_NEEDS_FLOW", True)
+    monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.15)
+    monkeypatch.setattr(settings, "FLOW_EXIT_BARS", 2)
+    trading = FakeTradingClient(positions=held_call_spread())
+    flow_state = {}
+    event_cycle = FakeStockDataClient(bars_by_symbol={"SPY": breakout_bars(direction="down")},
+                                      quotes_by_symbol={"SPY": (649.9, 650.1)},
+                                      trades_by_symbol={"SPY": selling_prints()})
+    first = cli.run_cycle(make_config(), trading, event_cycle, FakeOptionDataClient(HOLD_ZONE_MARKS),
+                          execute=False, manual_mode=True, flow_state=flow_state)
+    assert first["exits"] == [] and first["flow_holds"]
+    quiet_cycle = FakeStockDataClient(bars_by_symbol={"SPY": quiet_bars()},  # no event any more
+                                      quotes_by_symbol={"SPY": (649.9, 650.1)},
+                                      trades_by_symbol={"SPY": selling_prints()})
+    second = cli.run_cycle(make_config(), trading, quiet_cycle, FakeOptionDataClient(HOLD_ZONE_MARKS),
+                           execute=False, manual_mode=True, flow_state=flow_state)
+    assert second["exits"][0]["reason"] == "reversal"
+    # once the pending reversal is spent the tape alone never exits
+    third = cli.run_cycle(make_config(), trading, quiet_cycle, FakeOptionDataClient(HOLD_ZONE_MARKS),
+                          execute=False, manual_mode=True, flow_state=flow_state)
+    assert third["exits"] == []
+
+
+def test_run_refuses_to_start_when_the_llm_ping_fails(monkeypatch):
+    config = broker.load_config({"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s", "FEATHERLESS_API_KEY": "f"})
+    trading, stock, options = make_clients()
+    monkeypatch.setattr(cli, "_bootstrap", lambda: (config, trading, stock, options))
+    monkeypatch.setattr(cli, "setup_logging", lambda file_sink=False: None)
+
+    def failing_ping(key, transport=None):
+        raise cli.decision_layer.LlmError("featherless: every model failed (m: HTTP 401)")
+
+    monkeypatch.setattr(cli.decision_layer, "ping", failing_ping)
+    result = CliRunner().invoke(cli.app, ["run"])
+    assert result.exit_code == 1 and "HTTP 401" in result.output

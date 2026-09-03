@@ -52,3 +52,9 @@ def test_flow_against_needs_a_full_streak_of_opposing_readings():
     assert tape.flow_against("C", [-0.3, None], bars=2, min_imbalance=0.15) is None  # unknown reading
     assert tape.flow_against("P", [0.3, 0.16], bars=2, min_imbalance=0.15) is True
     assert tape.flow_against("P", [-0.3, -0.2], bars=2, min_imbalance=0.15) is False
+
+
+def test_opposing_streak_counts_trailing_opposing_readings():
+    assert tape.opposing_streak("C", [0.5, -0.3, -0.2], 0.15) == 2
+    assert tape.opposing_streak("C", [-0.3, 0.1], 0.15) == 0
+    assert tape.opposing_streak("P", [0.3, None, 0.4], 0.15) == 1

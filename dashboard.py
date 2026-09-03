@@ -115,8 +115,17 @@ def copy_journal(root: Path = ROOT) -> str:
     return "ok"
 
 
-def cli_snapshot(profile: str | None, out_path: Path | None = None) -> dict:
-    """Broker state read through the Alpaca CLI. Falls back to a stub, never raises."""
+def cli_snapshot(
+    profile: str | None,
+    out_path: Path | None = None,
+    expected_account_number: str | None = None,
+) -> dict:
+    """Broker state read through the Alpaca CLI. Falls back to a stub, never raises.
+
+    When `expected_account_number` (the account the engine trades, from the SDK
+    export) is given and the CLI profile points at another account, nothing of
+    that other account is published: the stub says `account_mismatch`.
+    """
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     binary = shutil.which("alpaca")
     if binary is None:
@@ -132,21 +141,36 @@ def cli_snapshot(profile: str | None, out_path: Path | None = None) -> dict:
         except ValueError:
             snapshot = {"source": "sdk", "cli_error": "cli_output_not_json", "generated_at": generated}
         else:
-            snapshot = {
-                "source": "alpaca-cli",
-                "generated_at": generated,
-                "profile": profile,
-                "clock": clock if isinstance(clock, dict) else {},
-                "account": {k: account.get(k) for k in ACCOUNT_FIELDS if k in account}
-                if isinstance(account, dict) else {},
-                "positions": [
-                    {"symbol": p.get("symbol"), "qty": p.get("qty")}
-                    for p in positions if isinstance(p, dict)
-                ] if isinstance(positions, list) else [],
-            }
+            cli_number = str(account.get("account_number", "")) if isinstance(account, dict) else ""
+            if expected_account_number and cli_number != str(expected_account_number):
+                snapshot = {"source": "sdk", "cli_error": "account_mismatch", "generated_at": generated,
+                            "profile": profile}
+            else:
+                snapshot = {
+                    "source": "alpaca-cli",
+                    "generated_at": generated,
+                    "profile": profile,
+                    "clock": clock if isinstance(clock, dict) else {},
+                    "account": {k: account.get(k) for k in ACCOUNT_FIELDS if k in account}
+                    if isinstance(account, dict) else {},
+                    "positions": [
+                        {"symbol": p.get("symbol"), "qty": p.get("qty")}
+                        for p in positions if isinstance(p, dict)
+                    ] if isinstance(positions, list) else [],
+                }
     if out_path is not None:
         _write_atomic(out_path, json.dumps(snapshot))
     return snapshot
+
+
+def expected_account_number(root: Path = ROOT) -> str | None:
+    """The engine's account id from the SDK export (logs/account.json), if present."""
+    try:
+        data = json.loads((root / "logs" / "account.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    number = data.get("account_number") if isinstance(data, dict) else None
+    return str(number) if number else None
 
 
 def export_candles(root: Path = ROOT, days: int = 20) -> str:
@@ -179,7 +203,8 @@ def export_all(root: Path = ROOT, *, candles: bool = True, deploy_enabled: bool 
         ("pnl", lambda: export_pnl(root)),
         ("config", lambda: write_config_json(root / "settings.yaml", cycles_dir(root) / "config.json")),
         ("journal", lambda: copy_journal(root)),
-        ("cli_snapshot", lambda: cli_snapshot(profile, cycles_dir(root) / "cli_snapshot.json")),
+        ("cli_snapshot", lambda: cli_snapshot(
+            profile, cycles_dir(root) / "cli_snapshot.json", expected_account_number(root))),
     ]
     if candles:
         steps.append(("candles", lambda: export_candles(root)))

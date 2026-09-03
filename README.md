@@ -54,7 +54,7 @@ Each box in the diagram is one module:
 |---|---|---|
 | Entry signal (market data) | `market_data.py` | OHLCV DataFrame for one symbol at a time, any bar timeframe |
 | Entry signal (analysis) | `signals.py` | RSI/ATR/MACD + event detection (gap, breakout, MACD cross) + entry gates (pure) |
-| Entry signal (decision) | `decision_layer.py` | LLM (OpenRouter) — or you, with `--manual-mode` — picks one entry at a time from the event-firing candidates; asked again with the rest until the per-cycle cap (2 entries) is used |
+| Entry signal (decision) | `decision_layer.py` | LLM (GLM on Featherless) — or you, with `--manual-mode` — picks one entry at a time from the event-firing candidates; asked again with the rest until the per-cycle cap (2 entries) is used |
 | Option screener | `options_screener.py` | expiry pick, spread enumeration, liquidity filter, reward-to-risk ranking, order plans (pure) |
 | Risk manager + Position manager | `pos_and_risk.py` | leg pairing, mechanical exits, equity-relative sizing (pure) |
 | Execution + Account state | `broker.py` | all env/Alpaca access; `submit_paper_order` is the only submitting function |
@@ -164,7 +164,7 @@ cp .env.example .env   # then paste your PAPER keys into .env
 
 `.env` is git-ignored and never read by the code itself — pass it with
 `uv run --env-file .env`. It holds only credentials: the Alpaca paper keys and
-optionally `OPENROUTER_API_KEY` (for LLM decisions; use `--manual-mode` without
+optionally `FEATHERLESS_API_KEY` (for LLM decisions; use `--manual-mode` without
 one). Strategy values live in `settings.yaml` (see Settings above).
 
 ## Run
@@ -200,7 +200,7 @@ agent checks this before arming an entry.
 The project ships a Claude Code skill (`.claude/skills/paca-agent/`) that runs
 one full cycle with Claude as the momentum-trader entry decider: it gathers
 `candidates`, `account` and recent journal context, reasons about the entry in
-the open, pipes its pick into `run --manual-mode --execute` (the OpenRouter LLM
+the open, pipes its pick into `run --manual-mode --execute` (the Featherless LLM
 is never called), verifies the entered symbol matched its stated pick, then
 redeploys the surge dashboard. Invoke it in a Claude Code session with:
 
@@ -321,7 +321,10 @@ and does not forecast the next bar, so it confirms and vetoes, never predicts:
 - reversal exit: the opposing event must be backed by the tape against the
   spread for `flow_exit_bars` (2) consecutive cycles (`exits.reversal_needs_flow`);
   an unknown tape falls back to the event-only rule, so no position is ever
-  held on missing data. Stop, take-profit and expiry exits are untouched;
+  held on missing data. The event is a one-bar pulse, so a held-back reversal
+  stays armed for `flow_exit_bars` more cycles while the tape confirms. Only
+  `--loop` keeps that memory: a single-shot `run` uses the event-only rule.
+  Stop, take-profit and expiry exits are untouched;
 - `flow_min_imbalance: 0` and `reversal_needs_flow: false` restore `dev/paca`.
 
 **3. Continuous loop with a live dashboard.**

@@ -53,6 +53,7 @@ class AccountState:
     legs: tuple[LegPosition, ...]
     unparsed_positions: tuple[str, ...]  # anything we refuse to manage
     open_order_symbols: frozenset[str]  # every symbol appearing on any open order (legs included)
+    account_number: str | None = None  # paper account id: the dashboard cross-checks the CLI against it
 
 
 @dataclass(frozen=True)

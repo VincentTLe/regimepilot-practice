@@ -104,7 +104,8 @@ def call_llm(
     url = f"{settings.LLM_BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}"}
     failures: list[str] = []
-    with httpx.Client(timeout=settings.LLM_TIMEOUT_SECONDS, transport=transport) as client:
+    timeout = httpx.Timeout(settings.LLM_TIMEOUT_SECONDS, connect=10.0)  # read budget per attempt, quick connect
+    with httpx.Client(timeout=timeout, transport=transport) as client:
         for model in (settings.PRIMARY_MODEL, *settings.FALLBACK_MODELS):
             json_mode = settings.LLM_JSON_MODE
             while True:

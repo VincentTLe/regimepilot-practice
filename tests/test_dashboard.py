@@ -56,3 +56,16 @@ def test_export_all_reports_failures_without_raising(monkeypatch, tmp_path):
     statuses = dashboard.export_all(tmp_path, candles=True, deploy_enabled=False)
     assert set(statuses) >= {"account", "pnl", "config", "journal", "cli_snapshot", "candles"}
     assert all(isinstance(v, str) for v in statuses.values())
+
+
+def test_cli_snapshot_refuses_another_account(monkeypatch):
+    monkeypatch.setattr(dashboard.shutil, "which", lambda name: "alpaca")
+    answers = {
+        "clock": json.dumps({"is_open": True}),
+        "account": json.dumps({"account_number": "PA_OTHER", "equity": "1"}),
+        "position": json.dumps([]),
+    }
+    monkeypatch.setattr(dashboard, "_run", lambda args, timeout=None: answers[args[1]])
+    snapshot = dashboard.cli_snapshot(profile="tape", expected_account_number="PA_ENGINE")
+    assert snapshot["source"] == "sdk" and snapshot["cli_error"] == "account_mismatch"
+    assert "PA_OTHER" not in json.dumps(snapshot)  # the wrong account is never published
