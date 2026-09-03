@@ -66,4 +66,4 @@ llm:                         # OpenAI-compatible chat endpoint for the entry dec
   fallback_models: [zai-org/GLM-5.3]        # tried in order when the primary fails (HTTP error, timeout, bad reply); then HOLD
   reasoning_effort: low      # low | high | max — Featherless/GLM extra body param; low keeps a decision well under the cycle interval
   timeout_seconds: 30        # read timeout per model attempt (5..120; connect capped at 10 s). Worst case per decision ~ 2 x models x this; the cycle makes at most 3 decisions
-  json_mode: true            # send response_format json_object; on HTTP 400 the same model is retried once without it
+  json_mode: false           # Featherless GLM answers response_format json_object with EMPTY content (measured 2026-09-03): keep off; on HTTP 400 a json-mode request is retried once without it

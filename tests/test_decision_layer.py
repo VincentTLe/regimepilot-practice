@@ -237,3 +237,14 @@ def test_manual_never_prompts_without_candidates():
     assert decision_layer.manual_decide(
         [candidate("SPY", block="stale_data")], input_fn=refuse_input, echo=silent
     ) is None
+
+
+def test_call_llm_reads_reasoning_when_content_is_empty():
+    body = {"model": "m-primary", "choices": [{"message": {
+        "content": "", "reasoning": 'The user wants JSON. {"action": "pass"}'}}]}
+    content, model = decision_layer.call_llm([], "key", transport=transport_returning(200, body))
+    assert model == "m-primary" and decision_layer.parse_entry_choice(content, {"SPY"}, model) is None
+    entered = {"model": "m-primary", "choices": [{"message": {
+        "content": "", "reasoning": 'ok {"action": "enter", "symbol": "SPY", "direction": "CALL", "thesis": "t"}'}}]}
+    content, _ = decision_layer.call_llm([], "key", transport=transport_returning(200, entered))
+    assert decision_layer.parse_entry_choice(content, {"SPY"}, "m").symbol == "SPY"

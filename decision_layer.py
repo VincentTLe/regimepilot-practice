@@ -79,7 +79,13 @@ def _parse_chat(response: httpx.Response, model: str) -> tuple[str, str] | None:
     """
     try:
         body = response.json()
-        content = body["choices"][0]["message"]["content"]
+        message = body["choices"][0]["message"]
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            # GLM-style replies sometimes land in the reasoning field with an empty
+            # content (seen on zai-org/GLM-5.3 via Featherless, 2026-09-03). The JSON
+            # extractor downstream tolerates prose around the object.
+            content = message.get("reasoning") or message.get("reasoning_content")
         model_used = body.get("model", model)
         if not isinstance(content, str) or not content.strip() or not isinstance(model_used, str):
             return None
