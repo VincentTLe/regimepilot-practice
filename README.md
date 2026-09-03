@@ -341,6 +341,17 @@ USO left the whitelist: too few IEX prints for a reliable tape reading.
 gap ran against tape-agree positions by 0.5 / 1.4 ATR on the two halves — more
 than the intraday edge — so the day's result is banked before the close.
 
+**2a. Tape-first entry (order flow alone).** Besides John's bar events, a
+symbol becomes a candidate when the 15-minute tick-rule imbalance is at least
+`tape_event_min_imbalance` (0.25) on at least `tape_event_min_trades` (300)
+prints and the last close sits beyond both EMA anchors: event `tape_buy` /
+`tape_sell`, same RSI, tape, decider, screener, sizing and exit path. Measured
+on 90 sessions of real IEX prints (11 names, first 60 sessions vs last 30):
++0.20 / +0.38 ATR to the close, 53% / 56% hit, 7–10 signals a day against 3.8
+for the bar events alone; 0.15 is noise (+0.02 / +0.06), 0.35 and above fires
+too rarely, a "new session high" continuation event lost 0.2 ATR on both halves
+and was rejected. `tape_event_min_imbalance: 0` turns it off.
+
 **2b. Market-wide "in play" scanner.** The static whitelist is only the floor.
 Every cycle `scanner.py` asks Alpaca's screener for the most active names (by
 volume and by trade count) and the top gainers and losers, keeps the ones that
