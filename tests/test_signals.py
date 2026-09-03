@@ -16,6 +16,7 @@ def tape_gate_off(monkeypatch):
     import settings
 
     monkeypatch.setattr(settings, "FLOW_MIN_IMBALANCE", 0.0)
+    monkeypatch.setattr(settings, "ATR_EVENT_MULT", 2.0)  # the event boundary tests were written for 2 x ATR
 
 
 def frame(rows: list[dict], *, end: datetime | None = None) -> pd.DataFrame:
