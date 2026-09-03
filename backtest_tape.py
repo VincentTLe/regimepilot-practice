@@ -1,14 +1,19 @@
 """Signal-quality backtest for the tape sensor. Read-only research: no orders.
 
-    uv run --env-file .env backtest_tape.py [--days 5] [--symbols SPY,NVDA] [--out logs/backtest_tape.csv]
+    uv run --env-file .env backtest_tape.py [--days 5] [--symbols SPY,NVDA] [--llm] [--out logs/backtest_tape.csv]
 
 For each completed session and whitelisted symbol it pulls the same data the
 live engine reads (5m IEX bars, IEX trade prints), replays the live entry gates
 on every regular-hours bar — events on the completed bar, the RSI exhaustion
 filter, the tape agreement over the trailing FLOW_LOOKBACK_MINUTES — and then
-measures what the underlying did next: the move in ATR units and percent 6 and
-12 bars later, and a reversal-exit simulation with and without the tape
-confirmation. The LLM is not replayed: every gate-passing event is taken.
+measures what the underlying did next: the move in ATR units and percent at
+several horizons, a reversal-exit simulation with and without the tape
+confirmation, and several exit-rule sets (stop / trailing / take-profit in
+ATR units) walked forward to the session close.
+
+`--llm` additionally replays the decider: at every bar where at least one
+tape-agree candidate exists the real Featherless model is asked with the live
+prompt, and its pick is scored against the candidates it could choose from.
 
 Options P&L is NOT modelled (no historical option data on this account). The
 `$ proxy` is a coarse translation: a near-ATM debit vertical carries delta
@@ -20,7 +25,7 @@ from __future__ import annotations
 import bisect
 import math
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -31,20 +36,34 @@ from alpaca.trading.requests import GetCalendarRequest
 from loguru import logger
 
 import broker
+import decision_layer
 import market_data
 import settings
 import signals
 import tape
 from cli import setup_logging
+from data_models import Event, SymbolFeatures
 from export_candles import bar_events
 
-HORIZONS = (6, 12)  # bars ahead: 30 and 60 minutes on 5m bars
+HORIZONS = (6, 12, 24, 36)  # bars ahead: 30, 60, 120, 180 minutes on 5m bars (capped at the session close)
 REVERSAL_HORIZON = 12
 DELTA_PROXY = 0.4
 FRICTION_PER_CONTRACT = 12.0
-REQUEST_PAUSE = 0.25  # seconds between data requests (rate-limit courtesy)
+REQUEST_PAUSE = 0.3  # seconds between data requests (rate-limit courtesy)
 DIRECTION_OF = {"gap_up": "CALL", "breakout_up": "CALL", "macd_cross_up": "CALL",
                 "gap_down": "PUT", "breakout_down": "PUT", "macd_cross_down": "PUT"}
+# Exit-rule sets walked forward on closes, all in ATR units of the entry bar:
+#   stop = exit when the move <= -stop; trail = once the move has reached +trail,
+#   exit when it gives back `trail` from its peak; tp = exit at +tp. None = off.
+# john_proxy approximates the shipped options rules (-50% debit ~ -2.5 ATR, 3x debit ~ +5 ATR).
+EXIT_RULES = {
+    "john_proxy": {"stop": 2.5, "trail": None, "tp": 5.0},
+    "cut1_trail1": {"stop": 1.0, "trail": 1.0, "tp": None},
+    "cut1_trail1.5": {"stop": 1.0, "trail": 1.5, "tp": None},
+    "cut0.75_trail1": {"stop": 0.75, "trail": 1.0, "tp": None},
+    "cut1.5_trail2": {"stop": 1.5, "trail": 2.0, "tp": None},
+    "hold_to_close": {"stop": None, "trail": None, "tp": None},
+}
 
 app = typer.Typer(add_completion=False)
 
@@ -75,6 +94,23 @@ def rsi_filtered(events: list[str], rsi: float | None) -> list[str]:
     return out
 
 
+def walk_exit(moves: list[float], stop: float | None, trail: float | None, tp: float | None) -> tuple[float, int]:
+    """Walk forward over signed moves (ATR units, one per bar after entry) and
+    return (move at exit, bars held). Checked on closes; the last move is the session close."""
+    if not moves:
+        return 0.0, 0
+    peak = 0.0
+    for n, move in enumerate(moves, start=1):
+        peak = max(peak, move)
+        if stop is not None and move <= -stop:
+            return move, n
+        if tp is not None and move >= tp:
+            return move, n
+        if trail is not None and peak >= trail and move <= peak - trail:
+            return move, n
+    return moves[-1], len(moves)
+
+
 def evaluate_day(
     df: pd.DataFrame,
     prints: list[tuple[float, float, float]],
@@ -98,6 +134,9 @@ def evaluate_day(
     closes = df["close"].to_list()
     atrs = df["atr"].to_list()
     rsis = df["rsi"].to_list()
+    hists = df["macd_hist"].to_list()
+    ema_fast = df["ema_fast"].to_list() if "ema_fast" in df else [math.nan] * len(df)
+    ema_slow = df["ema_slow"].to_list() if "ema_slow" in df else [math.nan] * len(df)
     flow_cache: dict[int, tape.FlowStats] = {}
 
     def flow(i: int) -> tape.FlowStats:
@@ -105,6 +144,9 @@ def evaluate_day(
             flow_cache[i] = flow_at(prints, stamps[i] + bar_seconds, settings.FLOW_LOOKBACK_MINUTES,
                                     settings.FLOW_MIN_TRADES)
         return flow_cache[i]
+
+    def num(value: float) -> float | None:
+        return None if value is None or (isinstance(value, float) and math.isnan(value)) else round(float(value), 4)
 
     rows: list[dict] = []
     for i in range(len(df)):
@@ -133,15 +175,26 @@ def evaluate_day(
                 "close": closes[i],
                 "rsi": round(rsis[i], 1),
                 "atr": round(atrs[i], 4),
+                "macd_hist": num(hists[i]),
+                "ema_fast_dist": num(closes[i] - ema_fast[i]) if not math.isnan(ema_fast[i]) else None,
+                "ema_slow_dist": num(closes[i] - ema_slow[i]) if not math.isnan(ema_slow[i]) else None,
                 "flow": None if stats.imbalance is None else round(stats.imbalance, 3),
                 "flow_trades": stats.trades,
                 "tape": status,
             }
+            path = [(closes[j] - closes[i]) * sign / atrs[i] for j in range(i + 1, session_last + 1)]
             for horizon in HORIZONS:
                 j = min(i + horizon, session_last)
                 move = (closes[j] - closes[i]) * sign if j > i else 0.0
                 row[f"atr_move_{horizon}"] = round(move / atrs[i], 3)
                 row[f"pct_move_{horizon}"] = round(100 * move / closes[i], 3)
+            row["atr_move_close"] = round(path[-1], 3) if path else 0.0
+            row["atr_peak"] = round(max(path), 3) if path else 0.0
+            row["atr_trough"] = round(min(path), 3) if path else 0.0
+            for name, rule in EXIT_RULES.items():
+                move, held = walk_exit(path, rule["stop"], rule["trail"], rule["tp"])
+                row[f"x_{name}_atr"] = round(move, 3)
+                row[f"x_{name}_bars"] = held
             # reversal-exit simulation: event-only rule (dev/paca) vs tape-confirmed rule
             opposite = "PUT" if direction == "CALL" else "CALL"
             option_type = "C" if direction == "CALL" else "P"
@@ -180,7 +233,7 @@ def dollar_proxy(pct_move: float, close: float) -> float:
 # --- data ---------------------------------------------------------------------
 
 def completed_sessions(trading, days: int, now: datetime) -> list:
-    request = GetCalendarRequest(start=(now - timedelta(days=days * 3 + 7)).date(), end=now.date())
+    request = GetCalendarRequest(start=(now - timedelta(days=days * 2 + 14)).date(), end=now.date())
     calendar = broker.guarded("calendar read", lambda: trading.get_calendar(request))
     done = [c for c in calendar if c.close.astimezone(timezone.utc) <= now]
     return done[-days:]
@@ -213,13 +266,60 @@ def fetch_prints(stock, symbol: str, start: datetime, end: datetime) -> list[tup
     return prints
 
 
+# --- LLM replay ---------------------------------------------------------------------
+
+def replay_llm(frame: pd.DataFrame, api_key: str, max_calls: int) -> pd.DataFrame:
+    """Ask the real decider at every bar with >= 1 tape-agree candidate; mark its pick."""
+    frame = frame.copy()
+    frame["llm_pick"] = False
+    frame["llm_asked"] = False
+    frame["llm_thesis"] = ""
+    calls = 0
+    for (_, bar_time), group in frame[frame["tape"] == "agree"].groupby(["date", "bar_time"]):
+        if calls >= max_calls:
+            break
+        candidates = []
+        for idx, row in group.iterrows():
+            candidates.append(SymbolFeatures(
+                symbol=row["symbol"], mid=float(row["close"]), rsi=float(row["rsi"]), atr=float(row["atr"]),
+                macd_hist=None if pd.isna(row["macd_hist"]) else float(row["macd_hist"]),
+                events=tuple(Event(kind=k, direction=row["direction"]) for k in str(row["events"]).split("+")),
+                bar_age_seconds=1.0,
+                ema_fast_dist=None if pd.isna(row["ema_fast_dist"]) else float(row["ema_fast_dist"]),
+                ema_slow_dist=None if pd.isna(row["ema_slow_dist"]) else float(row["ema_slow_dist"]),
+                flow_imbalance=float(row["flow"]), flow_trades=int(row["flow_trades"]),
+            ))
+        frame.loc[group.index, "llm_asked"] = True
+        calls += 1
+        try:
+            choice = decision_layer.decide_entry(candidates, api_key)
+        except decision_layer.LlmError as error:
+            logger.warning("LLM replay {}: {}", bar_time, error)
+            continue
+        if choice is not None:
+            hit = group[(group["symbol"] == choice.symbol) & (group["direction"] == choice.direction)]
+            if len(hit):
+                frame.loc[hit.index, "llm_pick"] = True
+                frame.loc[hit.index, "llm_thesis"] = choice.thesis
+            else:
+                logger.info("LLM replay {}: picked {} {} against the candidate direction", bar_time,
+                            choice.symbol, choice.direction)
+    logger.info("LLM replay: {} decision points asked", calls)
+    return frame
+
+
 # --- report ---------------------------------------------------------------------
+
+def _stats(df: pd.DataFrame, col: str) -> dict:
+    return {"n": len(df), "hit%": round(100 * (df[col] > 0).mean()) if len(df) else None,
+            "avg_ATR": round(df[col].mean(), 2) if len(df) else None,
+            "median_ATR": round(df[col].median(), 2) if len(df) else None}
+
 
 def summarize(frame: pd.DataFrame) -> str:
     if frame.empty:
         return "no signals"
     frame = frame.copy()
-    frame["usd_6"] = [dollar_proxy(p, c) for p, c in zip(frame["pct_move_6"], frame["close"])]
     frame["usd_12"] = [dollar_proxy(p, c) for p, c in zip(frame["pct_move_12"], frame["close"])]
     frame["hit_6"] = frame["atr_move_6"] > 0
     frame["hit_12"] = frame["atr_move_12"] > 0
@@ -232,37 +332,49 @@ def summarize(frame: pd.DataFrame) -> str:
         "hit%_60m": (100 * groups["hit_12"].mean()).round(0),
         "avg_ATR_30m": groups["atr_move_6"].mean().round(2),
         "avg_ATR_60m": groups["atr_move_12"].mean().round(2),
-        "median_ATR_60m": groups["atr_move_12"].median().round(2),
+        "avg_ATR_120m": groups["atr_move_24"].mean().round(2),
+        "avg_ATR_180m": groups["atr_move_36"].mean().round(2),
+        "avg_ATR_close": groups["atr_move_close"].mean().round(2),
         "sum_$proxy_60m": groups["usd_12"].sum().round(0),
     }).reindex([g for g in order if g in groups.groups])
     parts.append("Forward move by tape status (every RSI-passing event, 1 contract each):\n" + table.to_string())
     parts.append(
-        "\nJohn's gates alone (all rows): n={n}, hit%_60m={hit:.0f}, avg ATR 60m={avg:.2f}, $proxy 60m={usd:.0f}".format(
-            n=len(frame), hit=100 * frame["hit_12"].mean(), avg=frame["atr_move_12"].mean(), usd=frame["usd_12"].sum())
+        "\nJohn's gates alone (all rows): n={n}, hit%_60m={hit:.0f}, avg ATR 60m={avg:.2f}, avg ATR close={c:.2f}".format(
+            n=len(frame), hit=100 * frame["hit_12"].mean(), avg=frame["atr_move_12"].mean(),
+            c=frame["atr_move_close"].mean())
     )
     agree = frame[frame["tape"] == "agree"]
     if len(agree):
-        parts.append(
-            "Tape-agree only: n={n}, hit%_60m={hit:.0f}, avg ATR 60m={avg:.2f}, $proxy 60m={usd:.0f}".format(
-                n=len(agree), hit=100 * agree["hit_12"].mean(), avg=agree["atr_move_12"].mean(), usd=agree["usd_12"].sum())
-        )
+        rules = pd.DataFrame([
+            {"rule": name, **_stats(agree, f"x_{name}_atr"), "avg_bars": round(agree[f"x_{name}_bars"].mean(), 1),
+             "sum_ATR": round(agree[f"x_{name}_atr"].sum(), 1)}
+            for name in EXIT_RULES
+        ])
+        parts.append("\nExit-rule sets on tape-agree entries (ATR units, walked to the session close):\n"
+                     + rules.to_string(index=False))
+        parts.append("   peak reached (avg / median): {:.2f} / {:.2f} ATR; trough: {:.2f} / {:.2f}".format(
+            agree["atr_peak"].mean(), agree["atr_peak"].median(), agree["atr_trough"].mean(), agree["atr_trough"].median()))
     exits = pd.DataFrame({
         "rule": ["event_only", "tape_rule"],
         "avg_exit_ATR": [frame["exit_event_only_atr"].mean().round(2), frame["exit_tape_rule_atr"].mean().round(2)],
         "exited_early%": [100 * (frame["exit_event_only_bars"] < REVERSAL_HORIZON).mean(),
                           100 * (frame["exit_tape_rule_bars"] < REVERSAL_HORIZON).mean()],
-        "avg_hold_bars": [frame["exit_event_only_bars"].mean(), frame["exit_tape_rule_bars"].mean()],
     }).round(1)
     parts.append("\nReversal-exit simulation over 12 bars (all rows):\n" + exits.to_string(index=False))
-    if len(agree):
-        exits_a = pd.DataFrame({
-            "rule": ["event_only", "tape_rule"],
-            "avg_exit_ATR": [agree["exit_event_only_atr"].mean().round(2), agree["exit_tape_rule_atr"].mean().round(2)],
-            "exited_early%": [100 * (agree["exit_event_only_bars"] < REVERSAL_HORIZON).mean(),
-                              100 * (agree["exit_tape_rule_bars"] < REVERSAL_HORIZON).mean()],
-        }).round(1)
-        parts.append("Reversal-exit simulation, tape-agree entries only:\n" + exits_a.to_string(index=False))
-    by_symbol = frame[frame["tape"] == "agree"].groupby("symbol")["atr_move_12"].agg(["size", "mean"]).round(2)
+    if "llm_asked" in frame and frame["llm_asked"].any():
+        asked = frame[frame["llm_asked"]]
+        picks = asked[asked["llm_pick"]]
+        points = asked.groupby(["date", "bar_time"]).ngroups
+        parts.append("\nLLM replay: {} decision points, {} picks ({} passes)".format(
+            points, len(picks), points - len(picks)))
+        llm_table = pd.DataFrame([
+            {"group": "LLM picks", **_stats(picks, "atr_move_12"), "close": round(picks["atr_move_close"].mean(), 2) if len(picks) else None,
+             "cut1_trail1": round(picks["x_cut1_trail1_atr"].mean(), 2) if len(picks) else None},
+            {"group": "all tape-agree at those bars", **_stats(asked, "atr_move_12"), "close": round(asked["atr_move_close"].mean(), 2),
+             "cut1_trail1": round(asked["x_cut1_trail1_atr"].mean(), 2)},
+        ])
+        parts.append(llm_table.to_string(index=False))
+    by_symbol = agree.groupby("symbol")["atr_move_12"].agg(["size", "mean"]).round(2)
     if len(by_symbol):
         parts.append("\nTape-agree entries by symbol (n, avg ATR 60m):\n" + by_symbol.to_string())
     return "\n".join(parts)
@@ -273,15 +385,20 @@ def run(
     days: int = typer.Option(5, help="Completed sessions to replay."),
     symbols: str = typer.Option("", help="Comma-separated override of the whitelist."),
     out: Path = typer.Option(Path("logs") / "backtest_tape.csv", help="Per-signal CSV."),
+    llm: bool = typer.Option(False, "--llm", help="Replay the real decider at every bar with tape-agree candidates."),
+    llm_max: int = typer.Option(250, help="Cap on decider calls with --llm."),
 ) -> None:
     """Replay the entry gates on past sessions and report signal quality."""
     setup_logging()
     config = broker.load_config()
     trading, stock, _ = broker.build_clients(config)
+    if llm and not config.llm_api_key:
+        typer.echo("FEATHERLESS_API_KEY missing: cannot replay the decider")
+        raise typer.Exit(1)
     universe = tuple(s.strip().upper() for s in symbols.split(",") if s.strip()) or config.symbols
     now = datetime.now(timezone.utc)
     sessions = completed_sessions(trading, days, now)
-    logger.info("sessions: {}", [c.date.isoformat() for c in sessions])
+    logger.info("sessions: {} .. {} ({})", sessions[0].date, sessions[-1].date, len(sessions))
     rows: list[dict] = []
     for session in sessions:
         session_open = session.open.astimezone(timezone.utc)
@@ -302,6 +419,8 @@ def run(
             rows.extend(day_rows)
             logger.info("{} {}: {} bars, {} prints, {} signals", session.date, symbol, len(df), len(prints), len(day_rows))
     frame = pd.DataFrame(rows)
+    if llm and len(frame):
+        frame = replay_llm(frame, config.llm_api_key, llm_max)
     out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(out, index=False)
     typer.echo(f"\n{len(frame)} signals over {len(sessions)} sessions x {len(universe)} symbols -> {out}\n")

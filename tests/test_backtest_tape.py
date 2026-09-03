@@ -84,3 +84,12 @@ def test_reversal_simulation_event_only_exits_first_and_tape_rule_needs_convicti
     # selling prints everywhere: the tape confirms on the event bar itself
     rows = backtest_tape.evaluate_day(df, prints_for(df, "sell"), OPEN, session_close, bar_seconds=BAR)
     assert rows[0]["exit_tape_rule_bars"] == 3
+
+
+def test_walk_exit_rules():
+    path = [0.3, 0.8, 1.2, 1.6, 0.9, 0.4, -0.2, -1.1, -1.4]
+    assert backtest_tape.walk_exit(path, stop=1.0, trail=None, tp=None) == (-1.1, 8)   # stop on the first close <= -1
+    assert backtest_tape.walk_exit(path, stop=None, trail=1.0, tp=None) == (0.4, 6)    # peak 1.6, gives back 1.0 at 0.4
+    assert backtest_tape.walk_exit(path, stop=None, trail=None, tp=1.5) == (1.6, 4)    # take profit
+    assert backtest_tape.walk_exit(path, stop=None, trail=None, tp=None) == (-1.4, 9)  # hold to close
+    assert backtest_tape.walk_exit([], stop=1.0, trail=1.0, tp=None) == (0.0, 0)
