@@ -127,11 +127,14 @@ def exit_decision(
     today: date,
     opposing_event: bool = False,
     peak_mark: float | None = None,
+    end_of_day: bool = False,
 ) -> ExitDecision | None:
     """Mechanical exit verdict for one open spread, or None to keep holding.
 
-    Precedence: expiry, reversal, stop, take-profit, trail. Expiry (DTE <=
-    settings.EXIT_DTE) and reversal (an entry event against the spread, if
+    Precedence: expiry, end of day, reversal, stop, take-profit, trail. Expiry
+    (DTE <= settings.EXIT_DTE), end of day (the caller found the session inside
+    its last settings.FLATTEN_MINUTES_BEFORE_CLOSE minutes: nothing is held
+    overnight) and reversal (an entry event against the spread, if
     settings.REVERSAL_EXIT) exit even on missing marks or unknown entry debit —
     they are signal-based. Stop, take-profit and trail need both a known entry
     debit and fresh two-sided marks; when either is unknown we hold and let the
@@ -144,6 +147,9 @@ def exit_decision(
     if dte <= settings.EXIT_DTE:
         net_mark = _net_mark(long_quote, short_quote)
         return ExitDecision(spread=spread, reason="expiry", net_mark=net_mark)
+    if end_of_day:
+        net_mark = _net_mark(long_quote, short_quote)
+        return ExitDecision(spread=spread, reason="eod", net_mark=net_mark)
     if opposing_event and settings.REVERSAL_EXIT:
         net_mark = _net_mark(long_quote, short_quote)
         return ExitDecision(spread=spread, reason="reversal", net_mark=net_mark)

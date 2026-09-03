@@ -244,6 +244,7 @@ details.day:last-child .cycle-row:last-child { border-bottom: none; }
 .pill.exit-stop        { background: color-mix(in oklab, var(--critical) 16%, transparent); color: var(--critical); }
 .pill.exit-reversal    { background: color-mix(in oklab, var(--warning) 22%, transparent); color: var(--ink); }
 .pill.exit-expiry      { background: var(--chip); color: var(--ink-2); }
+.pill.exit-eod         { background: var(--chip); color: var(--ink-2); }
 .pill.exit-other       { background: var(--chip); color: var(--ink-2); }
 .pill.outcome-hold     { background: var(--chip); color: var(--ink-2); }
 .pill.outcome-market_closed { background: var(--chip); color: var(--muted); }
@@ -458,7 +459,7 @@ function groupByDay(list) {
 }
 
 /* ---------- exits ---------- */
-const EXIT_REASON_LABEL = { expiry: "≤2 DTE expiry", reversal: "reversal", stop: "stop −50%", take_profit: "take-profit +100%" };
+const EXIT_REASON_LABEL = { expiry: "≤2 DTE expiry", eod: "close before the bell", reversal: "reversal", stop: "stop −50%", take_profit: "take-profit +100%" };
 const exitReasonClass = (r) => r in EXIT_REASON_LABEL ? "exit-" + r : "exit-other";
 // "AAPL 2026-09-11 C" -> {underlying, expiration, type}
 function parseSpreadLabel(s) {
@@ -622,6 +623,7 @@ function render() {
     const bits = [];
     if (c.exits.length) bits.push(esc(exitSummary(c)));
     if (c.outcome === "market_closed") bits.push("market closed — no action");
+    if (c.outcome === "eod_window") bits.push("end-of-day window — spreads closed, no new entries");
     else if (c.entries.length) {
       for (const e of c.entries) bits.push(`<b>${esc(e.symbol)}</b> ${e.direction === "CALL" ? "call" : e.direction === "PUT" ? "put" : ""} spread` +
         (e.rejected ? ` — <span style="color:var(--critical)">${esc(e.rejected)}</span>` : " — submitted"));

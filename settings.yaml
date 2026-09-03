@@ -58,6 +58,7 @@ exits:                       # mechanical, checked every cycle — the LLM is ne
   trail_arm_mult: 0          # trailing exit arms once the mark has reached this multiple of the debit (0 = off; 90-session backtest: trailing cut winners); needs --loop
   trail_giveback: 0.25       # ...then exit when the mark gives back this fraction of its peak (0.25: a 3.20 peak on a 2.00 debit exits at 2.40)
   exit_dte: 2                # always exit at this many days to expiration or fewer
+  flatten_minutes_before_close: 15   # close every open spread and block entries inside the last N minutes of the session (0 = hold overnight). 90-session backtest 2026-09-03: the overnight gap ran AGAINST tape-agree positions by 0.5-1.4 ATR on both halves
   reversal_exit: true        # close a spread when an entry event fires AGAINST it (e.g. gap_down while holding a call spread)
   reversal_needs_flow: true  # ...but only once the tape has been against the spread for signals.flow_exit_bars cycles; false = event alone (dev/paca rule)
 

@@ -147,7 +147,7 @@ class OpenSpread:
 @dataclass(frozen=True)
 class ExitDecision:
     spread: OpenSpread
-    reason: str  # "stop" | "take_profit" | "expiry" | "reversal" | "trail"
+    reason: str  # "stop" | "take_profit" | "expiry" | "eod" | "reversal" | "trail"
     net_mark: float | None
 
 

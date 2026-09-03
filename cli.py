@@ -15,7 +15,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import asdict, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import typer
@@ -128,6 +128,18 @@ def _screen_spread(
     )
 
 
+def in_flatten_window(clock) -> bool:
+    """True inside the last settings.FLATTEN_MINUTES_BEFORE_CLOSE minutes of the
+    session: every open spread is closed and no entry is attempted, so nothing is
+    held overnight (0 = off; an unknown next_close also means off). 90-session
+    backtest 2026-09-03: the overnight gap ran against tape-agree positions by
+    0.5-1.4 ATR on both halves — more than the intraday edge itself."""
+    minutes = settings.FLATTEN_MINUTES_BEFORE_CLOSE
+    if minutes <= 0 or clock.next_close is None:
+        return False
+    return clock.next_close - clock.server_time <= timedelta(minutes=minutes)
+
+
 def run_cycle(
     config: Config,
     trading: object,
@@ -187,6 +199,9 @@ def run_cycle(
         record["outcome"] = "market_closed"
         append_journal(record)
         return record
+
+    eod = in_flatten_window(clock)
+    record["eod_window"] = eod
 
     # --- Trading signals: needed by the reversal exit AND the entry side, so they
     # cover the whitelist plus every held underlying (even one removed from the list)
@@ -295,6 +310,7 @@ def run_cycle(
                 clock.server_time.date(),
                 opposing_event=opposing,
                 peak_mark=peak_mark,
+                end_of_day=eod,
             )
             if decision is None:
                 if spread.net_entry_debit is None:
@@ -330,6 +346,14 @@ def run_cycle(
             )
     record["exits"] = exits
     record["flow_holds"] = flow_holds
+
+    if eod:
+        # Last minutes of the session: everything above was closed (or retried
+        # next cycle on a missing quote); nothing new is opened into the close.
+        logger.info("end-of-day window: entries blocked, {} exit(s) planned", len(exits))
+        record["outcome"] = "eod_window"
+        append_journal(record)
+        return record
 
     # --- Entry candidates: whitelist symbols only ---
     whitelist_features = {symbol: features[symbol] for symbol in config.symbols}

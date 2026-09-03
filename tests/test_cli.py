@@ -930,3 +930,31 @@ def test_trail_exit_tracks_the_peak_mark_across_cycles(monkeypatch):
                            execute=False, manual_mode=True, flow_state=flow_state)
     assert second["exits"][0]["reason"] == "trail"
     assert second["exits"][0]["peak_mark"] == pytest.approx(3.2)
+
+
+def test_end_of_day_window_flattens_and_blocks_entries(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(cli.settings, "FLATTEN_MINUTES_BEFORE_CLOSE", 15)
+    positions = [
+        fake_position(LONG_OCC, 1, 6.0, side="long"),
+        fake_position(SHORT_OCC, 1, 4.0, side="short"),  # entry debit 2.00
+    ]
+    marks = {LONG_OCC: fake_snapshot(2.9, 3.1), SHORT_OCC: fake_snapshot(0.9, 1.1)}  # net mark 2.0: hold zone
+    closing = SimpleNamespace(timestamp=NOW, is_open=True, next_close=NOW + timedelta(minutes=10))
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars()}, quotes_by_symbol={"SPY": (649.9, 650.1)}
+    )
+    record = cli.run_cycle(
+        make_config(), FakeTradingClient(positions=positions, clock=closing), stock,
+        FakeOptionDataClient(marks), execute=False, manual_mode=True,
+    )
+    assert record["outcome"] == "eod_window" and record["eod_window"] is True
+    assert record["exits"][0]["reason"] == "eod" and record["exits"][0]["receipt"]["dry_run"] is True
+    assert "candidates" not in record and "entries" not in record  # nothing opened into the close
+    # the default fake clock sits 3 hours before the close: same spread, no exit, entries run
+    record = cli.run_cycle(
+        make_config(), FakeTradingClient(positions=positions), stock,
+        FakeOptionDataClient(marks), execute=False, manual_mode=True,
+    )
+    assert record["eod_window"] is False and record["exits"] == [] and "candidates" in record

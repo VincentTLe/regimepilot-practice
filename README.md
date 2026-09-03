@@ -336,6 +336,10 @@ reason `trail`, peak kept in the loop process) but ships off (`trail_arm_mult: 0
 for the same reason. Size caps doubled (1% per entry, 2% per cycle, 3% per
 underlying, 15% total): a full stop costs 0.5% of equity. IBIT, MSTR, SLV and
 USO left the whitelist: too few IEX prints for a reliable tape reading.
+**Nothing is held overnight** (`flatten_minutes_before_close: 15`, exit reason
+`eod`, entries blocked in that window): on the same 90 sessions the overnight
+gap ran against tape-agree positions by 0.5 / 1.4 ATR on the two halves — more
+than the intraday edge — so the day's result is banked before the close.
 
 **3. Continuous loop with a live dashboard.**
 

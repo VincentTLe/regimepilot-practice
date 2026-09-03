@@ -97,7 +97,7 @@ _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
 _RISK_KEYS = {"per_entry_fraction", "per_underlying_fraction", "per_cycle_fraction",
               "total_fraction", "allow_stacking"}
 _EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit", "reversal_needs_flow",
-              "trail_arm_mult", "trail_giveback"}
+              "trail_arm_mult", "trail_giveback", "flatten_minutes_before_close"}
 _LLM_KEYS = {"provider", "base_url", "primary_model", "fallback_models",
              "reasoning_effort", "timeout_seconds", "json_mode"}
 _REASONING_EFFORTS = ("low", "high", "max")
@@ -191,6 +191,7 @@ def validate(raw: object) -> dict[str, object]:
     values["STOP_FRACTION"] = _number(exits, "exits", "stop_fraction", 0, 1, lo_open=True, hi_open=True)
     values["TAKE_PROFIT_MULT"] = _number(exits, "exits", "take_profit_mult", 1, lo_open=True)
     values["EXIT_DTE"] = _integer(exits, "exits", "exit_dte", 0)
+    values["FLATTEN_MINUTES_BEFORE_CLOSE"] = _integer(exits, "exits", "flatten_minutes_before_close", 0)
     if not isinstance(exits["reversal_exit"], bool):
         _fail("exits.reversal_exit", "must be true or false", exits["reversal_exit"])
     values["REVERSAL_EXIT"] = exits["reversal_exit"]
@@ -290,6 +291,7 @@ ALLOW_STACKING: bool = _VALUES["ALLOW_STACKING"]  # type: ignore[assignment]
 STOP_FRACTION: float = _VALUES["STOP_FRACTION"]  # type: ignore[assignment]
 TAKE_PROFIT_MULT: float = _VALUES["TAKE_PROFIT_MULT"]  # type: ignore[assignment]
 EXIT_DTE: int = _VALUES["EXIT_DTE"]  # type: ignore[assignment]
+FLATTEN_MINUTES_BEFORE_CLOSE: int = _VALUES["FLATTEN_MINUTES_BEFORE_CLOSE"]  # type: ignore[assignment]
 REVERSAL_EXIT: bool = _VALUES["REVERSAL_EXIT"]  # type: ignore[assignment]
 REVERSAL_NEEDS_FLOW: bool = _VALUES["REVERSAL_NEEDS_FLOW"]  # type: ignore[assignment]
 TRAIL_ARM_MULT: float = _VALUES["TRAIL_ARM_MULT"]  # type: ignore[assignment]

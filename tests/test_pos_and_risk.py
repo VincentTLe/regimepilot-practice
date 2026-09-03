@@ -184,6 +184,18 @@ def test_expiry_exit_survives_missing_marks():
     assert decision is not None and decision.reason == "expiry" and decision.net_mark is None
 
 
+def test_end_of_day_exit_beats_reversal_and_stop_but_not_expiry():
+    far = spread(expiration=date(2026, 9, 30))
+    healthy = (quote(2.9, 3.1), quote(0.9, 1.1))  # net mark 2.0: no stop, no take-profit
+    decision = pos_and_risk.exit_decision(far, *healthy, TODAY, opposing_event=True, end_of_day=True)
+    assert decision is not None and decision.reason == "eod" and decision.net_mark == 2.0
+    blind = pos_and_risk.exit_decision(far, None, None, TODAY, end_of_day=True)
+    assert blind is not None and blind.reason == "eod" and blind.net_mark is None  # missing marks still flatten
+    assert pos_and_risk.exit_decision(far, *healthy, TODAY, end_of_day=False) is None
+    near = spread(expiration=date(2026, 9, 1))
+    assert pos_and_risk.exit_decision(near, None, None, TODAY, end_of_day=True).reason == "expiry"
+
+
 def test_opposing_event_fired_mapping():
     from data_models import Event
 
