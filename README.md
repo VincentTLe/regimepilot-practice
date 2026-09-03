@@ -327,6 +327,15 @@ and does not forecast the next bar, so it confirms and vetoes, never predicts:
   Stop, take-profit and expiry exits are untouched;
 - `flow_min_imbalance: 0` and `reversal_needs_flow: false` restore `dev/paca`.
 
+**Exits, rewritten for "cut losers fast, hold winners long".** Stop at −30% of
+the debit (`stop_fraction: 0.7`, was −50%), the fixed take-profit moved out of
+the way (`take_profit_mult: 6.0`), and a new **trailing exit**: once the mark
+has reached `trail_arm_mult` (1.5×) the debit, giving back `trail_giveback`
+(25%) of the peak mark exits with reason `trail`. The peak lives in the loop
+process, so only `--loop` trails. Size caps doubled (1% per entry, 2% per
+cycle, 3% per underlying, 15% total): with the tighter stop a full loser still
+costs ~0.3% of equity. Expiry, reversal and stop keep their precedence.
+
 **3. Continuous loop with a live dashboard.**
 
 ```bash
