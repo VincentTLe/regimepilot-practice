@@ -48,20 +48,27 @@ def chart_block(n: int, row: pd.Series, bars: pd.DataFrame) -> str:
     held = int(row[f"x_{RULE}_bars"])
     exit_pos = min(entry_pos + held, len(bars) - 1)
     session = bars.iloc[max(0, entry_pos - 30): min(len(bars), entry_pos + 60)]
-    x = [ts.isoformat() for ts in session.index]
+    et = [ts.tz_convert("America/New_York") for ts in session.index]
+    x = [ts.strftime("%Y-%m-%d %H:%M") for ts in et]
+    stamp = lambda ts: ts.tz_convert("America/New_York").strftime("%Y-%m-%d %H:%M")  # noqa: E731
     traces = [
         {"type": "candlestick", "x": x, "open": session["open"].tolist(), "high": session["high"].tolist(),
          "low": session["low"].tolist(), "close": session["close"].tolist(), "name": row["symbol"],
-         "increasing": {"line": {"color": "#1E7B4F"}}, "decreasing": {"line": {"color": "#B3392F"}}},
-        {"type": "scatter", "mode": "markers", "x": [entry_ts.isoformat()], "y": [float(row["close"])],
+         "increasing": {"line": {"color": "#5FCB8F"}}, "decreasing": {"line": {"color": "#F08A7E"}}},
+        {"type": "scatter", "mode": "markers", "x": [stamp(entry_ts)], "y": [float(row["close"])],
          "marker": {"symbol": "triangle-up" if row["direction"] == "CALL" else "triangle-down", "size": 16,
-                    "color": "#0F5C6E"}, "name": f"LLM entry {row['direction']}"},
-        {"type": "scatter", "mode": "markers", "x": [bars.index[exit_pos].isoformat()],
+                    "color": "#5CC0D2"}, "name": f"LLM entry {row['direction']}"},
+        {"type": "scatter", "mode": "markers", "x": [stamp(bars.index[exit_pos])],
          "y": [float(bars["close"].iloc[exit_pos])],
-         "marker": {"symbol": "x", "size": 14, "color": "#B8791E"}, "name": f"exit ({RULE})"},
+         "marker": {"symbol": "x", "size": 14, "color": "#E4B25C"}, "name": f"exit ({RULE})"},
     ]
-    layout = {"height": 380, "margin": {"l": 40, "r": 20, "t": 30, "b": 30}, "xaxis": {"rangeslider": {"visible": False}},
-              "showlegend": True, "title": {"text": f"{row['symbol']} {row['date']} · {row['direction']} · {row['events']}", "font": {"size": 14}}}
+    layout = {"height": 380, "margin": {"l": 44, "r": 20, "t": 34, "b": 30},
+              "paper_bgcolor": "#161E25", "plot_bgcolor": "#161E25", "font": {"color": "#C9D3DC", "size": 12},
+              "xaxis": {"rangeslider": {"visible": False}, "gridcolor": "#26313A", "zerolinecolor": "#26313A",
+                        "type": "category", "nticks": 12, "title": {"text": "ET", "font": {"size": 11}}},
+              "yaxis": {"gridcolor": "#26313A", "zerolinecolor": "#26313A"},
+              "legend": {"orientation": "h", "y": 1.08, "x": 0},
+              "title": {"text": f"{row['symbol']} {row['date']} · {row['direction']} · {row['events']}", "font": {"size": 14, "color": "#E4EAEF"}}}
     move = float(row[f"x_{RULE}_atr"])
     thesis = html.escape(str(row.get("llm_thesis", "")))
     verdict = f"+{move:.2f}" if move > 0 else f"{move:.2f}"
@@ -89,9 +96,14 @@ def build_page(frame: pd.DataFrame, picks: pd.DataFrame, blocks: list[str], csv_
         )
         + "</table>"
     )
-    style = """<style>body{font-family:Segoe UI,Helvetica,Arial,sans-serif;max-width:1100px;margin:0 auto;padding:24px;color:#16202B;background:#F4F6F8}
-h1{font-size:1.6rem}h2{font-size:1.05rem;margin:28px 0 4px}table{border-collapse:collapse;font-size:.9rem}th,td{border-bottom:1px solid #D8DEE4;padding:6px 10px;text-align:left}
-.meta{color:#5B6875;font-size:.9rem;margin:2px 0}.thesis{font-style:italic;margin:4px 0 8px}section{background:#fff;border:1px solid #D8DEE4;padding:10px 14px;margin-top:14px}</style>"""
+    style = """<style>
+:root{--bg:#0F1519;--surface:#161E25;--ink:#E4EAEF;--muted:#93A1AD;--line:#26313A;--accent:#5CC0D2}
+body{font-family:Segoe UI,Helvetica,Arial,sans-serif;max-width:1100px;margin:0 auto;padding:24px;color:var(--ink);background:var(--bg)}
+h1{font-size:1.5rem;margin:0 0 6px}h2{font-size:1.02rem;margin:22px 0 4px;color:var(--accent)}
+table{border-collapse:collapse;font-size:.9rem;margin:10px 0 18px}th,td{border-bottom:1px solid var(--line);padding:6px 10px;text-align:left}th{color:var(--muted);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}
+.meta{color:var(--muted);font-size:.9rem;margin:2px 0}.thesis{font-style:italic;margin:4px 0 8px;color:#C9D3DC}
+section{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:10px 14px;margin-top:14px}
+b{color:#fff}</style>"""
     return (
         "<!doctype html><html><head><meta charset=utf-8><title>PACA backtest: LLM picks on candles</title>"
         '<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>' + style + "</head><body>"
