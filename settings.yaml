@@ -60,6 +60,7 @@ risk:                        # position sizing — all fractions of LIVE account
   per_cycle_fraction: 0.02   # new premium per cycle <= this fraction of equity; also caps a cycle at floor(per_cycle / per_entry) entries (0.02/0.01 = 2)
   total_fraction: 0.15       # total open premium at risk <= this fraction of equity
   allow_stacking: true       # allow a further SAME-direction entry on an underlying already held (sized by per_underlying_fraction); false = one spread per underlying
+  max_same_direction: 3      # at most this many open spreads pointing the same way (all call spreads, or all put spreads); 0 = no cap. 2026-09-03: six correlated call spreads were one bet on the S&P holding into the close
 
 exits:                       # mechanical, checked every cycle — the LLM is never consulted
   stop_fraction: 0.5         # stop-loss: exit when net mark <= this fraction of entry debit (0.5 = -50%; 90-session backtest: tighter stops cut the drift)

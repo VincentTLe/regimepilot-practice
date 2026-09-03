@@ -1020,3 +1020,27 @@ def test_scanned_name_without_a_chain_is_dropped_for_the_session(monkeypatch):
     )
     assert [c["symbol"] for c in again["candidates"]] == ["SPY"]  # RARE no longer offered
     cli.NO_CHAIN.clear()
+
+
+def test_same_direction_cap_blocks_more_calls_but_not_puts(monkeypatch):
+    import scanner as scanner_module
+
+    monkeypatch.setattr(cli.settings, "MAX_SAME_DIRECTION", 1)
+    positions = [
+        fake_position(LONG_OCC, 1, 6.0, side="long"),
+        fake_position(SHORT_OCC, 1, 4.0, side="short"),  # one SPY call spread already open
+    ]
+    marks = {LONG_OCC: fake_snapshot(2.9, 3.1), SHORT_OCC: fake_snapshot(0.9, 1.1)}  # hold zone: no exit
+    rows = [scanner_module.InPlay(symbol=s, change_pct=5.0, range_pct=6.0, price=100.0, trades=5000, volume=1e6) for s in ("QQQ", "XYZ")]
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars(), "QQQ": breakout_bars(), "XYZ": breakout_bars(direction="down")},
+        quotes_by_symbol={"SPY": (649.9, 650.1), "QQQ": (99.9, 100.1), "XYZ": (99.9, 100.1)},
+    )
+    record = cli.run_cycle(
+        make_config(), FakeTradingClient(positions=positions), stock, FakeOptionDataClient(marks),
+        execute=False, manual_mode=True, scanner_client=_FakeScanner(rows=rows),
+    )
+    gates = {c["symbol"]: c["gate_block"] for c in record["candidates"]}
+    assert gates["QQQ"] == "direction_cap" and gates["SPY"] == "direction_cap"  # a call add is capped too
+    assert gates["XYZ"] is None  # the put side is open
+    assert record["exits"] == []

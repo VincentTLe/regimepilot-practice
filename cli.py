@@ -399,6 +399,8 @@ def run_cycle(
                 pending=c.symbol in pending,
                 exiting=c.symbol in exiting,
             )
+        if c.gate_block is None:
+            c = _gate_direction(c, spreads)
         candidates.append(c)
     record["candidates"] = [
         {
@@ -504,6 +506,25 @@ def run_cycle(
     )
     append_journal(record)
     return record
+
+
+def _gate_direction(c: SymbolFeatures, spreads: list[OpenSpread]) -> SymbolFeatures:
+    """Cap the open spreads pointing the same way (settings.MAX_SAME_DIRECTION, 0 = off).
+
+    Six correlated call spreads are one bet on the index. Events in a capped
+    direction are dropped; a candidate left without events gates as direction_cap.
+    Exits are never gated here.
+    """
+    cap = settings.MAX_SAME_DIRECTION
+    if cap <= 0 or not c.events:
+        return c
+    calls = sum(1 for s in spreads if s.option_type == "C")
+    puts = sum(1 for s in spreads if s.option_type == "P")
+    capped = {direction for direction, n in (("CALL", calls), ("PUT", puts)) if n >= cap}
+    if not capped:
+        return c
+    kept = tuple(e for e in c.events if e.direction not in capped)
+    return replace(c, events=kept) if kept else replace(c, gate_block="direction_cap")
 
 
 def _gate_held(

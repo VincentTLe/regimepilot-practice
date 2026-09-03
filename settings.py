@@ -97,7 +97,7 @@ _SCREENER_KEYS = {"min_dte", "max_expiry_lookahead_days", "expiries_to_screen",
                   "min_net_debit", "min_liquid_legs_per_expiry",
                   "min_debit_frac", "max_debit_frac"}
 _RISK_KEYS = {"per_entry_fraction", "per_underlying_fraction", "per_cycle_fraction",
-              "total_fraction", "allow_stacking"}
+              "total_fraction", "allow_stacking", "max_same_direction"}
 _EXIT_KEYS = {"stop_fraction", "take_profit_mult", "exit_dte", "reversal_exit", "reversal_needs_flow",
               "trail_arm_mult", "trail_giveback", "flatten_minutes_before_close"}
 _LLM_KEYS = {"provider", "base_url", "primary_model", "fallback_models",
@@ -190,6 +190,7 @@ def validate(raw: object) -> dict[str, object]:
     if not isinstance(risk["allow_stacking"], bool):
         _fail("risk.allow_stacking", "must be true or false", risk["allow_stacking"])
     values["ALLOW_STACKING"] = risk["allow_stacking"]
+    values["MAX_SAME_DIRECTION"] = _integer(risk, "risk", "max_same_direction", 0)
 
     scanner = _section(raw, "scanner", _SCANNER_KEYS)
     if not isinstance(scanner["enabled"], bool):
@@ -303,6 +304,7 @@ PER_UNDERLYING_FRACTION: float = _VALUES["PER_UNDERLYING_FRACTION"]  # type: ign
 PER_CYCLE_FRACTION: float = _VALUES["PER_CYCLE_FRACTION"]  # type: ignore[assignment]
 TOTAL_FRACTION: float = _VALUES["TOTAL_FRACTION"]  # type: ignore[assignment]
 ALLOW_STACKING: bool = _VALUES["ALLOW_STACKING"]  # type: ignore[assignment]
+MAX_SAME_DIRECTION: int = _VALUES["MAX_SAME_DIRECTION"]  # type: ignore[assignment]
 STOP_FRACTION: float = _VALUES["STOP_FRACTION"]  # type: ignore[assignment]
 TAKE_PROFIT_MULT: float = _VALUES["TAKE_PROFIT_MULT"]  # type: ignore[assignment]
 EXIT_DTE: int = _VALUES["EXIT_DTE"]  # type: ignore[assignment]
