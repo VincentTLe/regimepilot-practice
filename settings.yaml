@@ -63,7 +63,7 @@ risk:                        # position sizing — all fractions of LIVE account
 
 exits:                       # mechanical, checked every cycle — the LLM is never consulted
   stop_fraction: 0.5         # stop-loss: exit when net mark <= this fraction of entry debit (0.5 = -50%; 90-session backtest: tighter stops cut the drift)
-  take_profit_mult: 6.0      # take-profit: exit when net mark >= this multiple of entry debit (6.0 = +500%: let the trail manage winners)
+  take_profit_mult: 2.5      # take-profit: exit when net mark >= this multiple of entry debit. 2.5 = +150% = 3 x the 50% stop: risk:reward 1:3 (Tan, 2026-09-03). Unreachable when 2.5 x debit exceeds the spread width (debit > 40% of width): then the close-of-day flatten banks it
   trail_arm_mult: 0          # trailing exit arms once the mark has reached this multiple of the debit (0 = off; 90-session backtest: trailing cut winners); needs --loop
   trail_giveback: 0.25       # ...then exit when the mark gives back this fraction of its peak (0.25: a 3.20 peak on a 2.00 debit exits at 2.40)
   exit_dte: 2                # always exit at this many days to expiration or fewer
