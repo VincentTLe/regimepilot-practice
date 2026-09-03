@@ -993,3 +993,30 @@ def test_scanned_names_join_the_universe_and_a_scanner_failure_is_harmless():
     )
     assert "scanned" not in broken and [c["symbol"] for c in broken["candidates"]] == ["SPY"]
     assert broken["outcome"] != "error"
+
+
+def test_scanned_name_without_a_chain_is_dropped_for_the_session(monkeypatch):
+    import scanner as scanner_module
+
+    cli.NO_CHAIN.clear()
+    rare = scanner_module.InPlay(symbol="RARE", change_pct=-44.0, range_pct=4.4, price=14.9, trades=9000, volume=1e6)
+    stock = FakeStockDataClient(
+        bars_by_symbol={"SPY": breakout_bars(), "RARE": breakout_bars()},
+        quotes_by_symbol={"SPY": (649.9, 650.1), "RARE": (14.8, 15.0)},
+    )
+    # manual decider picks candidate 1 (RARE sorts before SPY); the option client has no contracts at all
+    monkeypatch.setattr("builtins.input", lambda prompt="": "1")
+    fake = _FakeScanner(rows=[rare])
+    record = cli.run_cycle(
+        make_config(), FakeTradingClient(), stock, FakeOptionDataClient({}), execute=False, manual_mode=True,
+        scanner_client=fake,
+    )
+    entry = record["entries"][0]
+    assert entry["symbol"] == "RARE" and entry["rejected"] == "no_spread" and entry["screen_rejections"].get("no_expiration")
+    assert cli.NO_CHAIN == {"RARE"}
+    again = cli.run_cycle(
+        make_config(), FakeTradingClient(), stock, FakeOptionDataClient({}), execute=False, manual_mode=True,
+        scanner_client=fake,
+    )
+    assert [c["symbol"] for c in again["candidates"]] == ["SPY"]  # RARE no longer offered
+    cli.NO_CHAIN.clear()

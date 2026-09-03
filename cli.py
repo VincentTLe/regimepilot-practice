@@ -46,6 +46,9 @@ from data_models import (
 JOURNAL_PATH = Path("logs") / "cycles.jsonl"
 MIN_OPTIONS_LEVEL = 3  # spreads need Alpaca options trading level 3
 MAX_DECISIONS_PER_CYCLE = 3  # LLM calls per cycle: keeps the worst-case wall-clock under the interval
+# Scanned names whose option chain had no tradeable expiry this process lifetime: a
+# thin chain does not grow back within the session, and each retry burns a decision.
+NO_CHAIN: set[str] = set()
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -210,7 +213,7 @@ def run_cycle(
     scanned: list[str] = []
     if scanner_client is not None and not eod:
         try:
-            found = scanner_client.in_play(exclude=config.symbols)
+            found = [r for r in scanner_client.in_play(exclude=config.symbols) if r.symbol not in NO_CHAIN]
             scanned = [r.symbol for r in found]
             record["scanned"] = [
                 {"symbol": r.symbol, "change_pct": round(r.change_pct, 1), "range_pct": round(r.range_pct, 1),
@@ -486,6 +489,11 @@ def run_cycle(
             cycle_spent += entry["premium"]
             planned += 1
 
+    for e in entries:
+        rejections = e.get("screen_rejections") or {}
+        if e.get("rejected") == "no_spread" and rejections.get("no_expiration") and e["symbol"] not in config.symbols:
+            NO_CHAIN.add(e["symbol"])
+            logger.info("{}: no tradeable expiry, dropped from the scan for this session", e["symbol"])
     submitted = any(
         (e.get("receipt") or {}).get("submitted") for e in exits + entries
     )
