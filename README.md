@@ -347,3 +347,13 @@ journaled as `outcome: error` and the loop continues; Ctrl+C stops it. Set
 through the Alpaca CLI (`alpaca clock`, `alpaca account get`, `alpaca position list`,
 profile from `ALPACA_CLI_PROFILE`) into `cli_snapshot.json`, shown as a strip on
 the cycles page. Orders still go only through `broker.submit_paper_order`.
+
+**5. Backtesting the gates (read-only research).** `backtest_tape.py` replays the
+live entry gates on past sessions with the same IEX bars and prints, and reports
+the underlying's forward move by tape status plus a reversal-exit simulation with
+and without the tape rule. It does not model option prices (no historical option
+data on this account); the `$ proxy` column assumes delta 0.4 and $12 friction.
+
+```bash
+uv run --env-file .env backtest_tape.py --days 5            # -> logs/backtest_tape.csv + summary
+```
