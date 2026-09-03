@@ -387,14 +387,24 @@ def run(
     out: Path = typer.Option(Path("logs") / "backtest_tape.csv", help="Per-signal CSV."),
     llm: bool = typer.Option(False, "--llm", help="Replay the real decider at every bar with tape-agree candidates."),
     llm_max: int = typer.Option(250, help="Cap on decider calls with --llm."),
+    from_csv: Path = typer.Option(None, help="Skip the data pull: reuse the signals of an earlier run's CSV."),
 ) -> None:
     """Replay the entry gates on past sessions and report signal quality."""
     setup_logging()
     config = broker.load_config()
-    trading, stock, _ = broker.build_clients(config)
     if llm and not config.llm_api_key:
         typer.echo("FEATHERLESS_API_KEY missing: cannot replay the decider")
         raise typer.Exit(1)
+    if from_csv is not None:
+        frame = pd.read_csv(from_csv)
+        if llm and len(frame):
+            frame = replay_llm(frame, config.llm_api_key, llm_max)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(out, index=False)
+        typer.echo(f"\n{len(frame)} signals reloaded from {from_csv} -> {out}\n")
+        typer.echo(summarize(frame))
+        return
+    trading, stock, _ = broker.build_clients(config)
     universe = tuple(s.strip().upper() for s in symbols.split(",") if s.strip()) or config.symbols
     now = datetime.now(timezone.utc)
     sessions = completed_sessions(trading, days, now)

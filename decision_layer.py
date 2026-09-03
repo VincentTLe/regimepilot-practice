@@ -25,33 +25,42 @@ MAX_TOKENS = 1200  # reasoning tokens count against this on GLM-style models; th
 TEMPERATURE = 0.2
 
 SYSTEM_PROMPT = """You are the entry-signal module of a paper-trading agent that buys
-debit vertical spreads on liquid US options. Every candidate underlying has fired
-at least one technical event on its latest completed bar:
+debit vertical spreads on liquid US options. Every candidate has ALREADY passed
+deterministic gates: a momentum event on its latest completed 5-minute bar
   gap_up / gap_down           - bar opened more than 2 ATR away from the prior close
   breakout_up / breakout_down - bar body (close minus open) exceeded 2 ATR
-  macd_cross_up / macd_cross_down - MACD histogram crossed zero
-Each candidate also carries its RSI, ATR and MACD histogram readings, plus
-advisory trend context: ema_fast_dist / ema_slow_dist are the last close minus
-a fast/slow trend EMA (positive = price above the anchor, an up-regime;
-negative = below). Weigh trend alignment - entering against both anchors needs
-a strong reason. flow_imbalance is the tape: tick-rule buy volume minus sell
-volume over their sum for the last minutes of prints (-1 = every print hit the
-bid, +1 = every print lifted the offer), with flow_trades prints behind it. The
-candidate's events already agree with the tape; a weak reading (|flow| below
-0.3) or few prints is a reason to pass rather than chase. A candidate whose "held" field is set already has an open
-spread in that direction: entering it is an ADD to that position, and your
-direction must match it (code rejects any other direction). Choose at most
-ONE candidate from this list to enter, or pass. Once an entry is placed you may
-be asked again in the same cycle with the remaining candidates.
+  macd_cross_up / macd_cross_down - MACD histogram crossed zero by at least 0.05 ATR
+an RSI exhaustion filter, and a tape check: flow_imbalance is the tick-rule buy
+volume minus sell volume over their sum for the last minutes of prints (-1 =
+every print hit the bid, +1 = every print lifted the offer), flow_trades is the
+number of prints behind it, and it already agrees with the event direction.
+Each candidate also carries RSI, ATR, the MACD histogram and advisory trend
+context: ema_fast_dist / ema_slow_dist are the last close minus a fast/slow
+trend EMA (positive = above the anchor, an up-regime; negative = below).
+
+Your job is to ENTER the single strongest candidate. Rank by: (1) event
+quality - a gap or breakout beats a bare macd_cross; (2) tape conviction -
+larger |flow_imbalance| on more prints; (3) trend alignment - the EMA distances
+carrying the sign of the trade; (4) room to run - RSI not near 70 for a CALL or
+30 for a PUT. Pass ONLY for a concrete reason you state in the thesis: fewer
+than about 100 prints behind the flow, the event runs against BOTH EMA
+anchors, RSI within 5 points of exhaustion in the trade direction, or a "held"
+position the candidate would contradict. Do not pass merely because conviction
+is moderate: the risk manager sizes every trade and mechanical stops cut it.
+
+A candidate whose "held" field is set already has an open spread in that
+direction: entering it is an ADD to that position, and your direction must
+match it (code rejects any other direction). Choose at most ONE candidate from
+this list to enter, or pass. Once an entry is placed you may be asked again in
+the same cycle with the remaining candidates.
 
 Reply with strict JSON only:
 {"action": "enter" | "pass", "symbol": "<one of the candidate symbols>",
  "direction": "CALL" | "PUT", "thesis": "<one sentence>"}
 
 Rules: only pick a symbol from the candidate list. CALL means you expect the
-underlying to rise, PUT to fall. The event direction is a hint, not an order;
-an exhausted move (e.g. extreme RSI) may argue against following it. Pass when
-nothing is convincing - passing is always acceptable."""
+underlying to rise, PUT to fall; follow the event direction unless a concrete
+reason above says otherwise."""
 
 
 class LlmError(Exception):
