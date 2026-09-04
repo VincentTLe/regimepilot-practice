@@ -397,6 +397,27 @@ data on this account); the `$ proxy` column assumes delta 0.4 and $12 friction.
 uv run --env-file .env backtest_tape.py --days 5            # -> logs/backtest_tape.csv + summary
 ```
 
+**4b. Convex mode (`convex.py`) — one all-in option, Friday 09:35–10:45 ET.**
+A separate loop, never run together with `cli.py run` on the same account: it
+refuses to start next to positions or orders it did not create. It buys ONE
+long call or put on SPY or QQQ (expiry within `convex.max_expiry_days`) with
+`cash_fraction` of the cash, capped at `max_contracts`, and manages it
+mechanically: take profit at `take_profit_mult` × entry (4.0 = +300%), stop at
+`stop_fraction` × entry, forced sell-to-close at the bid from `time_exit`, a
+market order from `market_exit`, done at `session_end`. The LLM is the only
+discretionary part: from a briefing (spot, session facts incl. the first-bar
+direction, 5-minute indicators, tape, and the near-the-money chain with live
+quotes and the code's eligibility verdict per row) it picks symbol, direction,
+expiration and strike, or passes. Honest framing: a lottery ticket with a
+signal — negative expectancy, a real shot at a multiple only on a strong
+directional move inside the window. Paper only.
+
+```bash
+uv run --env-file .env convex.py brief --ask                 # the briefing and the model's reply, no orders
+uv run --env-file .env convex.py run --loop --execute        # Friday 09:20 ET, after stopping cli.py run
+uv run --env-file .env convex.py run --execute --flatten-now # manual bail-out: sell now
+```
+
 **5b. Rule audit by counterfactual replay.** `review_rules.py` grades every
 decision of a session against what the underlying did next: entries, decider
 passes (thesis journaled), and every candidate blocked by each rule (graded on

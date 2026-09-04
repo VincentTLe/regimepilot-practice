@@ -83,8 +83,28 @@ def _string_list(value: object, path: str) -> tuple[str, ...]:
 
 
 _TOP_KEYS = {"symbols", "bar_timeframe", "loop_interval_seconds",
-             "signals", "scanner", "screener", "risk", "exits", "llm"}
+             "signals", "scanner", "convex", "screener", "risk", "exits", "llm"}
 _SCANNER_KEYS = {"enabled", "top", "min_price", "min_trades", "min_move_pct"}
+_CONVEX_KEYS = {"symbols", "max_expiry_days", "strike_band_pct", "strikes_each_side", "cash_fraction",
+                "max_contracts", "max_spread_bps", "max_quote_age_seconds", "min_open_interest",
+                "stop_fraction", "take_profit_mult", "entry_start", "entry_end", "time_exit",
+                "market_exit", "session_end", "cooldown_seconds", "max_entries_per_day",
+                "loop_interval_seconds"}
+
+
+def _hhmm(section: dict, path: str, key: str):
+    """A wall-clock time written as "HH:MM" (Eastern), as a datetime.time."""
+    from datetime import time
+
+    value = section[key]
+    try:
+        hour, minute = str(value).split(":")
+        parsed = time(int(hour), int(minute))
+    except (TypeError, ValueError):
+        parsed = None
+    if not isinstance(value, str) or parsed is None:
+        _fail(f"{path}.{key}", 'must be a "HH:MM" time (24h, Eastern)', value)
+    return parsed
 _SIGNAL_KEYS = {"rsi_period", "atr_period", "macd_fast", "macd_slow", "macd_signal",
                 "atr_event_mult", "stale_bar_factor", "min_bars",
                 "macd_min_hist_atr", "rsi_overbought", "rsi_oversold",
@@ -201,6 +221,31 @@ def validate(raw: object) -> dict[str, object]:
     values["SCANNER_MIN_TRADES"] = _integer(scanner, "scanner", "min_trades", 0)
     values["SCANNER_MIN_MOVE_PCT"] = _number(scanner, "scanner", "min_move_pct", 0)
 
+    convex = _section(raw, "convex", _CONVEX_KEYS)
+    values["CONVEX_SYMBOLS"] = _string_list(convex["symbols"], "convex.symbols")
+    if not values["CONVEX_SYMBOLS"]:
+        _fail("convex.symbols", "must list at least one symbol", convex["symbols"])
+    values["CONVEX_MAX_EXPIRY_DAYS"] = _integer(convex, "convex", "max_expiry_days", 0)
+    values["CONVEX_STRIKE_BAND_PCT"] = _number(convex, "convex", "strike_band_pct", 0, 0.2, lo_open=True)
+    values["CONVEX_STRIKES_EACH_SIDE"] = _integer(convex, "convex", "strikes_each_side", 1)
+    values["CONVEX_CASH_FRACTION"] = _number(convex, "convex", "cash_fraction", 0, 1, lo_open=True)
+    values["CONVEX_MAX_CONTRACTS"] = _integer(convex, "convex", "max_contracts", 1)
+    values["CONVEX_MAX_SPREAD_BPS"] = _number(convex, "convex", "max_spread_bps", 0, lo_open=True)
+    values["CONVEX_MAX_QUOTE_AGE_SECONDS"] = _number(convex, "convex", "max_quote_age_seconds", 0, lo_open=True)
+    values["CONVEX_MIN_OPEN_INTEREST"] = _integer(convex, "convex", "min_open_interest", 0)
+    values["CONVEX_STOP_FRACTION"] = _number(convex, "convex", "stop_fraction", 0, 1, lo_open=True, hi_open=True)
+    values["CONVEX_TAKE_PROFIT_MULT"] = _number(convex, "convex", "take_profit_mult", 1, lo_open=True)
+    clock_keys = ("entry_start", "entry_end", "time_exit", "market_exit", "session_end")
+    times = [_hhmm(convex, "convex", key) for key in clock_keys]
+    for earlier, later, key in zip(times, times[1:], clock_keys[1:]):
+        if later <= earlier:
+            _fail(f"convex.{key}", "must be later than the previous convex time", convex[key])
+    for key, value in zip(clock_keys, times):
+        values[f"CONVEX_{key.upper()}"] = value
+    values["CONVEX_COOLDOWN_SECONDS"] = _integer(convex, "convex", "cooldown_seconds", 0)
+    values["CONVEX_MAX_ENTRIES_PER_DAY"] = _integer(convex, "convex", "max_entries_per_day", 1)
+    values["CONVEX_LOOP_INTERVAL_SECONDS"] = _integer(convex, "convex", "loop_interval_seconds", 5)
+
     exits = _section(raw, "exits", _EXIT_KEYS)
     values["STOP_FRACTION"] = _number(exits, "exits", "stop_fraction", 0, 1, lo_open=True, hi_open=True)
     values["TAKE_PROFIT_MULT"] = _number(exits, "exits", "take_profit_mult", 1, lo_open=True)
@@ -314,6 +359,25 @@ SCANNER_TOP: int = _VALUES["SCANNER_TOP"]  # type: ignore[assignment]
 SCANNER_MIN_PRICE: float = _VALUES["SCANNER_MIN_PRICE"]  # type: ignore[assignment]
 SCANNER_MIN_TRADES: int = _VALUES["SCANNER_MIN_TRADES"]  # type: ignore[assignment]
 SCANNER_MIN_MOVE_PCT: float = _VALUES["SCANNER_MIN_MOVE_PCT"]  # type: ignore[assignment]
+CONVEX_SYMBOLS: tuple[str, ...] = _VALUES["CONVEX_SYMBOLS"]  # type: ignore[assignment]
+CONVEX_MAX_EXPIRY_DAYS: int = _VALUES["CONVEX_MAX_EXPIRY_DAYS"]  # type: ignore[assignment]
+CONVEX_STRIKE_BAND_PCT: float = _VALUES["CONVEX_STRIKE_BAND_PCT"]  # type: ignore[assignment]
+CONVEX_STRIKES_EACH_SIDE: int = _VALUES["CONVEX_STRIKES_EACH_SIDE"]  # type: ignore[assignment]
+CONVEX_CASH_FRACTION: float = _VALUES["CONVEX_CASH_FRACTION"]  # type: ignore[assignment]
+CONVEX_MAX_CONTRACTS: int = _VALUES["CONVEX_MAX_CONTRACTS"]  # type: ignore[assignment]
+CONVEX_MAX_SPREAD_BPS: float = _VALUES["CONVEX_MAX_SPREAD_BPS"]  # type: ignore[assignment]
+CONVEX_MAX_QUOTE_AGE_SECONDS: float = _VALUES["CONVEX_MAX_QUOTE_AGE_SECONDS"]  # type: ignore[assignment]
+CONVEX_MIN_OPEN_INTEREST: int = _VALUES["CONVEX_MIN_OPEN_INTEREST"]  # type: ignore[assignment]
+CONVEX_STOP_FRACTION: float = _VALUES["CONVEX_STOP_FRACTION"]  # type: ignore[assignment]
+CONVEX_TAKE_PROFIT_MULT: float = _VALUES["CONVEX_TAKE_PROFIT_MULT"]  # type: ignore[assignment]
+CONVEX_ENTRY_START = _VALUES["CONVEX_ENTRY_START"]
+CONVEX_ENTRY_END = _VALUES["CONVEX_ENTRY_END"]
+CONVEX_TIME_EXIT = _VALUES["CONVEX_TIME_EXIT"]
+CONVEX_MARKET_EXIT = _VALUES["CONVEX_MARKET_EXIT"]
+CONVEX_SESSION_END = _VALUES["CONVEX_SESSION_END"]
+CONVEX_COOLDOWN_SECONDS: int = _VALUES["CONVEX_COOLDOWN_SECONDS"]  # type: ignore[assignment]
+CONVEX_MAX_ENTRIES_PER_DAY: int = _VALUES["CONVEX_MAX_ENTRIES_PER_DAY"]  # type: ignore[assignment]
+CONVEX_LOOP_INTERVAL_SECONDS: int = _VALUES["CONVEX_LOOP_INTERVAL_SECONDS"]  # type: ignore[assignment]
 REVERSAL_EXIT: bool = _VALUES["REVERSAL_EXIT"]  # type: ignore[assignment]
 REVERSAL_NEEDS_FLOW: bool = _VALUES["REVERSAL_NEEDS_FLOW"]  # type: ignore[assignment]
 TRAIL_ARM_MULT: float = _VALUES["TRAIL_ARM_MULT"]  # type: ignore[assignment]

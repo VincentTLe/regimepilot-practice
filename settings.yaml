@@ -38,6 +38,27 @@ scanner:                     # market-wide "in play" names added to the universe
   min_trades: 2000           # IEX prints so far today at least this many (the tape needs prints)
   min_move_pct: 3.0          # today's |change| or high-low range at least this % of yesterday's close
 
+convex:                      # all-in single-option mode (convex.py). NEVER run it together with `cli.py run` on one account
+  symbols: [SPY, QQQ]        # the LLM picks one of these
+  max_expiry_days: 4         # expiries from today up to this many calendar days out (0 = today only; 4 reaches Tue 2026-09-08 across Labor Day)
+  strike_band_pct: 0.02      # contracts within +/- this fraction of spot are fetched
+  strikes_each_side: 3       # ...and this many strikes on each side of spot go into the briefing
+  cash_fraction: 0.95        # fraction of min(cash, options buying power) spent on the ONE position
+  max_contracts: 250         # hard cap on contracts per order (hundreds of 0DTE contracts are untested on paper)
+  max_spread_bps: 1500       # reject contracts quoted wider than this (15% of mid)
+  max_quote_age_seconds: 30  # the indicative feed is slow at the open
+  min_open_interest: 100
+  stop_fraction: 0.5         # sell when the mark <= this fraction of the entry price (-50%)
+  take_profit_mult: 4.0      # sell when the mark >= this multiple of the entry price (4.0 = +300%)
+  entry_start: "09:35"       # ET; entries allowed from here (the first 5-minute bar must be complete)
+  entry_end: "10:30"         # ...until here
+  time_exit: "10:45"         # sell-to-close at the bid from here, re-quoted every cycle
+  market_exit: "10:55"       # cancel the resting limit, market sell-to-close
+  session_end: "11:00"       # loop ends (hackathon deadline 10:00 CDT = 11:00 ET)
+  cooldown_seconds: 300      # wait after any exit before the next entry
+  max_entries_per_day: 2     # the initial bet plus one re-entry after a stop
+  loop_interval_seconds: 60  # 0DTE options move fast: check exits every minute
+
 screener:                    # which vertical spreads are even considered
   min_dte: 5                 # nearest expiry must be at least this many days out
   max_expiry_lookahead_days: 45   # ignore expirations further out than this many days

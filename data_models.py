@@ -54,6 +54,8 @@ class AccountState:
     unparsed_positions: tuple[str, ...]  # anything we refuse to manage
     open_order_symbols: frozenset[str]  # every symbol appearing on any open order (legs included)
     account_number: str | None = None  # paper account id: the dashboard cross-checks the CLI against it
+    cash: float | None = None  # settled cash: what a long option can actually be bought with (convex mode)
+    options_buying_power: float | None = None  # Alpaca's own cap for option purchases (convex mode)
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,46 @@ class OrderPlan:
     client_order_id: str
     order_class: str = "mleg"
     time_in_force: str = "day"
+
+
+@dataclass(frozen=True)
+class SingleLegPlan:
+    """One long option bought or sold to close (convex mode). limit_price None = market order (exit only)."""
+
+    kind: str  # "enter" | "exit"
+    symbol: str  # OCC option symbol
+    underlying: str
+    qty: int
+    side: str  # "buy" | "sell"
+    intent: str  # "buy_to_open" | "sell_to_close"
+    limit_price: float | None
+    client_order_id: str  # must start with "cx-": how convex tells its own orders from the spread engine's
+    time_in_force: str = "day"
+
+
+@dataclass(frozen=True)
+class OpenOption:
+    """A long single-leg option the convex mode owns (recovered from the account every cycle)."""
+
+    symbol: str
+    underlying: str
+    expiration: date
+    option_type: str  # "C" | "P"
+    strike: float
+    qty: int  # positive
+    avg_entry_price: float | None
+
+
+@dataclass(frozen=True)
+class ConvexChoice:
+    action: str  # "enter" | "pass"
+    symbol: str | None
+    direction: str | None  # "CALL" | "PUT"
+    expiration: date | None
+    strike: float | None
+    contract_symbol: str | None
+    thesis: str
+    model: str
 
 
 @dataclass(frozen=True)

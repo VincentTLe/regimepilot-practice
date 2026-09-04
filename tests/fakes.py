@@ -25,8 +25,14 @@ def fake_clock(is_open: bool = True, server_time: datetime = NOW) -> SimpleNames
     )
 
 
-def fake_account(equity: float | None = 100_000.0, level: int = 3) -> SimpleNamespace:
-    return SimpleNamespace(equity=equity, options_trading_level=level)
+def fake_account(equity: float | None = 100_000.0, level: int = 3, cash: float | None = None,
+                 options_buying_power: float | None = None) -> SimpleNamespace:
+    account = SimpleNamespace(equity=equity, options_trading_level=level)
+    if cash is not None:
+        account.cash = cash
+    if options_buying_power is not None:
+        account.options_buying_power = options_buying_power
+    return account
 
 
 def fake_position(

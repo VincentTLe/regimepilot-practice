@@ -80,6 +80,10 @@ def broken(mutate) -> dict:
         (lambda r: r["exits"].update(flatten_minutes_before_close=-1), "exits.flatten_minutes_before_close"),
         (lambda r: r["scanner"].update(top=-1), "scanner.top"),
         (lambda r: r["risk"].update(max_same_direction=-1), "risk.max_same_direction"),
+        (lambda r: r["convex"].update(cash_fraction=1.5), "convex.cash_fraction"),
+        (lambda r: r["convex"].update(entry_end="09:00"), "convex.entry_end"),  # not after entry_start
+        (lambda r: r["convex"].update(time_exit="9am"), "convex.time_exit"),
+        (lambda r: r.pop("convex"), "convex"),
         (lambda r: r["signals"].update(tape_event_min_imbalance=1.5), "signals.tape_event_min_imbalance"),
         (lambda r: r["scanner"].update(enabled="yes"), "scanner.enabled"),
         (lambda r: r.pop("scanner"), "scanner"),

@@ -20,6 +20,8 @@ from alpaca.data.historical import OptionHistoricalDataClient, StockHistoricalDa
 from alpaca.data.requests import OptionSnapshotRequest, StockLatestQuoteRequest, StockTradesRequest
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import ContractType, OrderClass, OrderSide, PositionIntent, QueryOrderStatus, TimeInForce
+from alpaca.trading.requests import MarketOrderRequest  # convex mode: market sell-to-close fallback only
+from data_models import SingleLegPlan
 from alpaca.trading.requests import (
     GetOptionContractsRequest,
     GetOrdersRequest,
@@ -209,7 +211,20 @@ def fetch_account_state(trading: Any, whitelist: tuple[str, ...]) -> AccountStat
         unparsed_positions=tuple(unparsed),
         open_order_symbols=frozenset(order_symbols),
         account_number=str(getattr(account, "account_number", "") or "") or None,
+        cash=as_float(getattr(account, "cash", None)),
+        options_buying_power=as_float(getattr(account, "options_buying_power", None)),
     )
+
+
+def fetch_open_client_ids(trading: Any) -> dict[str, str]:
+    """Open order ids -> client_order_id. The convex mode refuses to run next to orders it did not place."""
+    request = GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500, nested=True)
+    raw_orders = guarded("orders read", lambda: trading.get_orders(request))
+    return {
+        str(order_id): str(getattr(order, "client_order_id", None) or "")
+        for order in raw_orders
+        if (order_id := getattr(order, "id", None))
+    }
 
 
 def fetch_open_orders(trading: Any) -> dict[str, str]:
@@ -404,6 +419,48 @@ def fetch_contracts(
     raise BrokerError("contracts read failed: too many pages")
 
 
+def fetch_contracts_window(
+    trading: Any, underlying: str, spot: float, today: date, max_days: int, band_pct: float
+) -> list[dict]:
+    """Calls AND puts expiring within `max_days` (0 = today) with strikes within ±band_pct of spot.
+
+    Rows: {symbol, expiration, type ("C"/"P"), strike, open_interest, tradable}; the
+    contract fields are parsed from the OCC symbol so fakes with a bare symbol work.
+    Non-tradable contracts are dropped. Convex mode only.
+    """
+    rows: list[dict] = []
+    page_token = None
+    for _ in range(MAX_CONTRACT_PAGES):
+        request = GetOptionContractsRequest(
+            underlying_symbols=[underlying],
+            root_symbol=underlying,
+            expiration_date_gte=today,
+            expiration_date_lte=today + timedelta(days=max_days),
+            strike_price_gte=str(round(spot * (1 - band_pct), 2)),
+            strike_price_lte=str(round(spot * (1 + band_pct), 2)),
+            limit=CONTRACT_PAGE_LIMIT,
+            page_token=page_token,
+        )
+        response = guarded("contracts read", lambda: trading.get_option_contracts(request))
+        for contract in response.option_contracts or []:
+            parsed = pos_and_risk.parse_occ(str(contract.symbol))
+            if parsed is None or getattr(contract, "tradable", True) is False:
+                continue
+            _, expiration, option_type, strike = parsed
+            rows.append({
+                "symbol": str(contract.symbol),
+                "expiration": expiration,
+                "type": option_type,
+                "strike": strike,
+                "open_interest": as_int(getattr(contract, "open_interest", None)),
+                "tradable": True,
+            })
+        page_token = getattr(response, "next_page_token", None)
+        if not page_token:
+            return rows
+    raise BrokerError("contracts read failed: too many pages")
+
+
 def fetch_option_snapshots(option_data: Any, symbols: list[str]) -> dict[str, Any]:
     snapshots: dict[str, Any] = {}
     for start in range(0, len(symbols), SNAPSHOT_BATCH):
@@ -493,6 +550,67 @@ def submit_paper_order(trading: Any, plan: OrderPlan) -> OrderReceipt:
         client_order_id=plan.client_order_id,
         order_id=str(getattr(order, "id", None)),
         status=str(getattr(status, "value", status)),
+    )
+
+
+_SINGLE_LEG_SHAPES = {"enter": ("buy", "buy_to_open"), "exit": ("sell", "sell_to_close")}
+CONVEX_PREFIX = "cx-"
+
+
+def submit_single_leg_order(trading: Any, plan: SingleLegPlan) -> OrderReceipt:
+    """The convex mode's only way to spend money: one long option in, one sell-to-close out.
+
+    Re-validates the plan (shape, qty, OCC symbol, the `cx-` client id, DAY, a positive
+    limit for entries; exits may be market orders). An Alpaca refusal never raises:
+    the receipt carries submitted=False and the exception type name only.
+    """
+    if (
+        _SINGLE_LEG_SHAPES.get(plan.kind) != (plan.side, plan.intent)
+        or plan.qty < 1
+        or pos_and_risk.parse_occ(plan.symbol) is None
+        or not str(plan.client_order_id).startswith(CONVEX_PREFIX)
+        or plan.time_in_force != "day"
+        or (plan.kind == "enter" and (plan.limit_price is None or plan.limit_price <= 0))
+        or (plan.limit_price is not None and plan.limit_price <= 0)
+    ):
+        raise BrokerError("single-leg plan failed validation, refusing to submit")
+    common = dict(
+        symbol=plan.symbol,
+        qty=plan.qty,
+        side=_SIDE[plan.side],
+        time_in_force=TimeInForce.DAY,
+        position_intent=_INTENT[plan.intent],
+        order_class=OrderClass.SIMPLE,
+        client_order_id=plan.client_order_id,
+    )
+    request = (
+        MarketOrderRequest(**common)
+        if plan.limit_price is None
+        else LimitOrderRequest(limit_price=plan.limit_price, **common)
+    )
+    try:
+        order = trading.submit_order(request)
+    except Exception as error:
+        return OrderReceipt(submitted=False, client_order_id=plan.client_order_id, error=type(error).__name__)
+    status = getattr(order, "status", None)
+    return OrderReceipt(
+        submitted=True,
+        order_id=str(getattr(order, "id", "") or "") or None,
+        client_order_id=plan.client_order_id,
+        status=getattr(status, "value", str(status)) if status is not None else None,
+    )
+
+
+def fetch_order_fill(trading: Any, order_id: str) -> tuple[str | None, float | None]:
+    """(status, filled_avg_price) for the journal; never raises."""
+    try:
+        order = trading.get_order_by_id(order_id)
+    except Exception:
+        return None, None
+    status = getattr(order, "status", None)
+    return (
+        getattr(status, "value", str(status)) if status is not None else None,
+        as_float(getattr(order, "filled_avg_price", None)),
     )
 
 

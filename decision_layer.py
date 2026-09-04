@@ -73,12 +73,12 @@ class LlmError(Exception):
     pass
 
 
-def _payload(model: str, messages: list[dict], json_mode: bool) -> dict:
+def _payload(model: str, messages: list[dict], json_mode: bool, max_tokens: int = MAX_TOKENS) -> dict:
     payload = {
         "model": model,
         "messages": messages,
         "temperature": TEMPERATURE,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens,
         "reasoning_effort": settings.LLM_REASONING_EFFORT,
     }
     if json_mode:
@@ -113,6 +113,7 @@ def call_llm(
     messages: list[dict],
     api_key: str,
     transport: httpx.BaseTransport | None = None,
+    max_tokens: int = MAX_TOKENS,
 ) -> tuple[str, str]:
     """POST to the OpenAI-compatible endpoint in settings.yaml (Featherless).
 
@@ -131,7 +132,7 @@ def call_llm(
             json_mode = settings.LLM_JSON_MODE
             while True:
                 try:
-                    response = client.post(url, json=_payload(model, messages, json_mode), headers=headers)
+                    response = client.post(url, json=_payload(model, messages, json_mode, max_tokens), headers=headers)
                 except Exception as error:
                     failures.append(f"{model}: {type(error).__name__}")
                     break
